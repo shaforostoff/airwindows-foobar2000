@@ -1,0 +1,100 @@
+<#
+.SYNOPSIS
+    Keeps the portable DSP cores byte-identical across plug-in formats.
+
+.DESCRIPTION
+    A core - declick_core.{h,cpp} and friends - deliberately knows nothing about
+    foobar2000, VST or Win32, so every format can compile the same file. What it
+    cannot be is a shared file on disk: a WinVST folder has to stand on its own,
+    because the Airwindows build is "drag the plug-in's files into VSTProject and
+    press build", and the folder that gets committed is the folder that was
+    dragged. So each format gets a copy, and this script is what stops the copies
+    from drifting.
+
+    The foobar2000 tree holds the canonical copy of each core. Run with no
+    arguments to push it out to every mirror; run with -Check to compare only,
+    which is what build_release.ps1 does before it builds anything.
+
+    Adding a format means adding one line to $mirrors.
+
+.PARAMETER Check
+    Report differences and exit 1 instead of copying. Nothing is written.
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File scripts\sync_cores.ps1
+
+.EXAMPLE
+    # what CI wants: fail if a mirror has been edited behind the canonical copy
+    powershell -ExecutionPolicy Bypass -File scripts\sync_cores.ps1 -Check
+#>
+
+[CmdletBinding()]
+param(
+    [switch] $Check
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$root    = Split-Path -Parent $PSScriptRoot          # plugins/foobar2000_dsp
+$plugins = Split-Path -Parent $root                  # plugins
+
+# canonical source directory -> files -> directories that must hold a copy
+$mirrors = @(
+    @{
+        From  = Join-Path $root 'foo_dsp_declick'
+        Files = @('declick_core.h', 'declick_core.cpp')
+        To    = @(Join-Path $plugins 'WinVST\Declick')
+    }
+)
+
+$drifted = @()
+$copied  = 0
+
+foreach ($m in $mirrors) {
+    foreach ($file in $m.Files) {
+        $src = Join-Path $m.From $file
+        if (-not (Test-Path $src)) { throw "canonical core missing: $src" }
+        $srcHash = (Get-FileHash -Algorithm SHA256 $src).Hash
+
+        foreach ($dir in $m.To) {
+            $dst = Join-Path $dir $file
+            $rel = $dst.Substring($plugins.Length).TrimStart('\')
+
+            if (Test-Path $dst) {
+                if ((Get-FileHash -Algorithm SHA256 $dst).Hash -eq $srcHash) {
+                    Write-Host ("  same     {0}" -f $rel) -ForegroundColor DarkGray
+                    continue
+                }
+                $state = 'differs'
+            } else {
+                $state = 'missing'
+            }
+
+            if ($Check) {
+                Write-Host ("  {0,-8} {1}" -f $state, $rel) -ForegroundColor Red
+                $drifted += $rel
+            } else {
+                if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
+                Copy-Item $src $dst -Force
+                Write-Host ("  updated  {0}" -f $rel) -ForegroundColor Yellow
+                $copied++
+            }
+        }
+    }
+}
+
+if ($Check) {
+    if ($drifted.Count -gt 0) {
+        Write-Host ''
+        Write-Warning (("{0} mirrored core file(s) do not match the canonical copy in " +
+            "foobar2000_dsp. Run scripts\sync_cores.ps1 to update them, or move the edit " +
+            "into the canonical copy first if that is where it belongs.") -f $drifted.Count)
+        exit 1
+    }
+    Write-Host "`nevery mirrored core matches" -ForegroundColor Green
+    exit 0
+}
+
+Write-Host ("`n{0} file(s) updated" -f $copied) -ForegroundColor Green
+exit 0

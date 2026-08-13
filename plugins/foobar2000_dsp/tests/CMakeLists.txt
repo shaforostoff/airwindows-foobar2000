@@ -1,14 +1,19 @@
 # ---------------------------------------------------------------------------
 # Tests
 #
-#   decrackle_verify  - DSP core vs. a literal transcription of the Airwindows
-#                       VST source, plus robustness and throughput. No SDK.
-#   declick_verify    - the declicker's AR linear algebra vs. dense brute
-#                       force, plus streaming properties. No SDK.
-#   preset_roundtrip  - every parameter survives save/load. Links the SDK, so
-#                       it needs foobar2000's shared.dll; skips if absent.
-#   component_smoke   - loads the built DLL through foobar2000's own service
-#                       plumbing. Needs foobar2000 installed; skips if absent.
+#   decrackle_verify   - DSP core vs. a literal transcription of the Airwindows
+#                        VST source, plus robustness and throughput. No SDK.
+#   declick_verify     - the declicker's AR linear algebra vs. dense brute
+#                        force, plus streaming properties. No SDK.
+#   declick_rt_verify  - counts heap allocations on the processing path and
+#                        requires zero. No SDK.
+#   declick_vst_verify - the WinVST port of the declicker vs. the core it
+#                        shares with this one. Built against tests/vst2_stub,
+#                        not Steinberg's SDK. No SDK.
+#   preset_roundtrip   - every parameter survives save/load. Links the SDK, so
+#                        it needs foobar2000's shared.dll; skips if absent.
+#   component_smoke    - loads the built DLL through foobar2000's own service
+#                        plumbing. Needs foobar2000 installed; skips if absent.
 # ---------------------------------------------------------------------------
 
 add_executable(decrackle_verify
@@ -48,6 +53,74 @@ endif()
 
 add_test(NAME declick_verify COMMAND declick_verify)
 set_target_properties(declick_verify PROPERTIES FOLDER "tests")
+
+# ---------------------------------------------------------------------------
+# The audio thread must not touch the heap. Replaces global operator new and
+# requires the count to be zero across the processing path and every parameter
+# change. No SDK.
+
+add_executable(declick_rt_verify
+    declick_rt_verify.cpp
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_declick/declick_core.cpp"
+)
+
+target_include_directories(declick_rt_verify PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_declick")
+
+if(MSVC)
+    target_compile_options(declick_rt_verify PRIVATE /W4)
+endif()
+
+add_test(NAME declick_rt_verify COMMAND declick_rt_verify)
+set_target_properties(declick_rt_verify PROPERTIES FOLDER "tests")
+
+# ---------------------------------------------------------------------------
+# The WinVST port of the declicker, against the core it shares with this tree.
+#
+# It compiles the WinVST folder's OWN copy of declick_core.cpp, deliberately:
+# that is the file the VST project builds, so this is testing the artefact that
+# ships rather than a stand-in for it. Whether that copy is still byte-identical
+# to the canonical one is a different question, and the answer is
+# scripts/sync_cores.ps1 -Check, which build_release.ps1 runs first.
+#
+# vst2_stub must come first on the include path: that is where the
+# "audioeffectx.h" the plug-in asks for is found. Steinberg's real one is not in
+# this repository, so this test cannot establish that the plug-in compiles in
+# the real VSTProject - only that the DSP, the latency contract, the parameter
+# mapping and the preset chunk behave. See tests/vst2_stub/audioeffectx.h.
+
+set(WINVST_DECLICK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../WinVST/Declick")
+
+if(EXISTS "${WINVST_DECLICK_DIR}/Declick.cpp")
+    add_executable(declick_vst_verify
+        declick_vst_verify.cpp
+        vst2_stub/audioeffectx.h
+        "${WINVST_DECLICK_DIR}/Declick.cpp"
+        "${WINVST_DECLICK_DIR}/DeclickProc.cpp"
+        "${WINVST_DECLICK_DIR}/declick_core.cpp"
+    )
+
+    target_include_directories(declick_vst_verify PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vst2_stub"
+        "${WINVST_DECLICK_DIR}")
+
+    if(MSVC)
+        target_compile_options(declick_vst_verify PRIVATE /W4)
+        # The wrapper follows the Airwindows house pattern - `A = 0.5;` on a
+        # float, `*out1 = inputSampleL;` from a double, and setChunk() ignoring
+        # byteSize on purpose - so it warns exactly where the other 519 plug-ins
+        # do. Those are not ours to fix either.
+        set_source_files_properties(
+            "${WINVST_DECLICK_DIR}/Declick.cpp"
+            "${WINVST_DECLICK_DIR}/DeclickProc.cpp"
+            PROPERTIES COMPILE_OPTIONS "/wd4244;/wd4305;/wd4100")
+    endif()
+
+    add_test(NAME declick_vst_verify COMMAND declick_vst_verify)
+    set_target_properties(declick_vst_verify PROPERTIES FOLDER "tests")
+else()
+    message(STATUS "plugins/WinVST/Declick not present - skipping declick_vst_verify")
+endif()
 
 # ---------------------------------------------------------------------------
 # Preset serialisation. Always built - a compile break here is worth catching

@@ -12,33 +12,13 @@
 #include <mutex>
 #include <vector>
 
-#if defined(_M_IX86) || defined(_M_X64)
-#include <xmmintrin.h>
-#endif
-
 using declick::Channel;
 using declick::Config;
 using declick::Params;
+using declick::scoped_flush_denormals;   // FTZ; lives in the core so that every
+                                         // port of it rounds the same way
 
 namespace {
-
-class scoped_flush_denormals {
-public:
-    scoped_flush_denormals(const scoped_flush_denormals &) = delete;
-    void operator=(const scoped_flush_denormals &) = delete;
-#if defined(_M_IX86) || defined(_M_X64)
-    scoped_flush_denormals() : m_saved(_mm_getcsr()) {
-        if ((m_saved & 0x8000u) == 0u) _mm_setcsr(m_saved | 0x8000u);
-    }
-    ~scoped_flush_denormals() {
-        if ((m_saved & 0x8000u) == 0u) _mm_setcsr(m_saved);
-    }
-private:
-    unsigned m_saved;
-#else
-    scoped_flush_denormals() {}
-#endif
-};
 
 // ---------------------------------------------------------------------------
 

@@ -224,6 +224,56 @@ that `config().latency` is a buffering delay, not a shift: that many samples
 must go in before the first block comes out, but the emitted stream is aligned
 with the input.
 
+Memory is **750 kB per channel** at 44.1 kHz and 1.5 MB at 192 kHz, fixed at
+`configure()` and independent of the parameters — see
+[Real-time safety](#real-time-safety) for why it is sized that way, and why
+that figure is *lower* than what the same code used to reach at run time.
+
+### Real-time safety
+
+An audio callback must not allocate: `malloc` may take a lock, and a lock held
+by a lower-priority thread is a dropout. `declick_rt_verify` replaces global
+`operator new` and requires the count to be **zero** across the processing path,
+every parameter change, `reset()`, `prime()` and `drain()`, in both access
+patterns — one sample at a time as the VST does it, and whole-chunk-then-drain
+as foobar2000 does.
+
+Getting there took two fixes, neither of which was visible until counted:
+
+* **The output FIFO** was a `std::vector` that grew by `push_back` to 65536
+  samples and was then compacted with `erase()`. About a second and a half into
+  *every stream* the audio thread took a **720 kB reallocation**. It is now a
+  fixed-capacity ring, sized for `maxBlock + 2 * kBlock`.
+* **The per-click interpolation scratch** was `assign()`ed to a length that
+  varies with the run being repaired, so it grew whenever a longer click turned
+  up than any seen so far — a long tail of reallocations that never quite
+  stopped. It is now reserved for the worst case the detector can produce.
+
+The buffers are sized from `Config`'s `buf*` envelope, which is derived from the
+**sample rate alone** — `bufOrder` is `kMaxOrder` and `bufMaxRun` is
+`Params::sanitize()`'s 20 ms ceiling. So a parameter change that resizes the
+pipeline still resets it, but `configure()` reassigns every vector to the length
+it already has, and neither `assign()` nor `resize()` reallocates below the
+capacity it is holding. Only a sample rate change touches the heap.
+
+Sizing for the envelope rather than the current settings sounds like it should
+cost memory, and it does not:
+
+| | after `configure()` | peak during playback |
+| --- | --- | --- |
+| before | 100 kB | **858 kB** |
+| now | **750 kB** | 750 kB |
+
+The old code simply reached its footprint later, on the audio thread, one
+reallocation at a time. Two things keep the new figure down: the ring is 139 kB
+where the grown FIFO reached 720 kB, and the Wiener buffers — 455 kB of it, and
+the largest single item — are **not reserved at all** unless
+`Config::wienerAlpha` is greater than zero, which by default it is not. With the
+Wiener path deliberately engaged it is 1.2 MB per channel.
+
+The refactor is bit-exact: 8 parameter/sample-rate combinations × 3 block
+patterns × Wiener off and on, hashed before and after, identical.
+
 ---
 
 ## Ground truth
@@ -503,6 +553,29 @@ dry/wet 0 is a bit-exact bypass; and the latency contract holds in both
 directions (no output before `latency` samples are fed, output immediately
 after).
 
+**`declick_rt_verify`** counts heap allocations on the processing path and
+requires zero — see [Real-time safety](#real-time-safety) for what it caught.
+It also records the one documented exception (a push larger than
+`Config::maxBlock`) as a positive assertion rather than leaving it implicit, and
+prints the per-channel footprint so a regression in that shows up in the log.
+
+**`declick_vst_verify`** holds the WinVST port to the same maths — see
+[Sharing a core with the other plug-in formats](#sharing-a-core-with-the-other-plug-in-formats).
+The central check drives `declick::Channel` directly with the same `Config` and
+the same per-sample push/pull; the plug-in's `processDoubleReplacing` output is
+**bit-identical**, worst deviation **0.000e+00**, on both x86 and x64. If that
+ever stops being true, one of the two wrappers has grown DSP of its own. It also
+covers the parts a VST has to get right on its own: that block patterns from
+`1/1/1/1` to `1024/64/4096/1` all yield the *same* stream, which is what proves
+the pre-roll arithmetic (get it wrong and the core zero-fills mid-stream); that
+the declared latency is the real one in both directions; that a Sensitivity move
+retunes without renegotiating latency or leaving a gap while a Model order move
+does the opposite; dry/wet 0 as a bit-exact bypass; `resume()` starting from
+silence rather than the previous take; hostile input; the slider-to-core
+mappings; and the preset chunk, including pinning out-of-range stored values.
+Built against `tests/vst2_stub`, so it needs no SDK — with the caveat noted
+above about what that does not establish.
+
 **`preset_roundtrip`** saves each component's parameters to a `dsp_preset` and
 reads them back, checking every field individually with values chosen so that a
 field read out of position cannot pass by accident. It also covers the
@@ -579,6 +652,7 @@ scripts/
   build_release.ps1               the release build + packaging entry point
   check_win7.ps1                  reads a built DLL's PE headers and imports for Windows 7 compatibility
   get_sdk.ps1                     wrapper around fb2k_download_sdk.cmake
+  sync_cores.ps1                  mirrors the cores out to the other plug-in formats
 foo_dsp_decrackle/
   decrackle_core.{h,cpp}          the DSP (scalar + SSE2); no foobar2000 or Win32 dependency
   dsp_decrackle.cpp               the foobar2000 DSP service
@@ -595,6 +669,10 @@ tests/
   decrackle_reference.h           verbatim Airwindows VST source, used as an oracle
   decrackle_verify.cpp            correctness, robustness, throughput
   declick_verify.cpp              AR linear algebra vs. dense brute force
+  declick_rt_verify.cpp           counts audio-thread allocations, requires zero
+  declick_vst_verify.cpp          the WinVST port vs. the core it shares
+  vst2_stub/audioeffectx.h        our own minimal VST 2.4 declarations, so the above
+                                  builds without Steinberg's SDK
   preset_roundtrip.cpp            parameters survive save/load, both components
   component_smoke.cpp             loads a DLL through the real SDK plumbing
 external/                         the downloaded SDK (git-ignored)
@@ -604,6 +682,68 @@ dist/                             release artefacts (git-ignored)
 `decrackle_core.{h,cpp}` deliberately knows nothing about foobar2000, VST or
 Win32, which is what lets the test harness compare it against the original
 source directly.
+
+---
+
+## Sharing a core with the other plug-in formats
+
+Declick has a second consumer: **`plugins/WinVST/Declick`**, a VST2 build of the
+same algorithm. It compiles `declick_core.{h,cpp}` — not a reimplementation of
+it, and not a translation. There is exactly one copy of the maths in this
+repository that anything is allowed to diverge from, and it is the one in
+`foo_dsp_declick/`.
+
+The VST folder holds a **byte-identical copy** rather than reaching across the
+tree for this one. That is not laziness: an Airwindows WinVST folder has to
+stand on its own, because the build is "drag the plug-in's files into
+VSTProject and press build" (`plugins/AirwindowsWinVSTTemplate.txt`) and the
+folder that gets committed is the folder that was dragged. A `..\..\` include
+path would break the moment anyone followed those instructions.
+
+So the copies are mechanical and checked:
+
+```powershell
+.\scripts\sync_cores.ps1          # push the canonical core out to every format
+.\scripts\sync_cores.ps1 -Check   # compare only, non-zero exit on any drift
+```
+
+`build_release.ps1` runs `-Check` before it configures anything, so a component
+whose maths no longer matches the VST's cannot be packaged. Adding a third
+format is one line in `$mirrors`.
+
+**Edit the copy in `foo_dsp_declick/`, never a mirror.** A mirror edit is not
+merged, it is overwritten.
+
+### What the VST wrapper adds, and why none of it is in the core
+
+| | |
+| --- | --- |
+| **Pre-roll** | A VST must return n samples for every n it is given, and the core holds `config().latency` samples of lookahead. `Channel::prime()` feeds it that many zeros up front, after which `available() >= n` holds for *any* block size, so the wrapper is a plain one-in-one-out loop with no FIFO of its own and no risk of the core zero-filling mid-stream. Those zeros are the reported delay. |
+| **`setInitialDelay` / `getGetTailSize`** | foobar2000 is told the latency through `get_latency()` and flushes with `on_endofplayback()`. A VST needs the equivalent two, and `ioChanged()` when Max repair or Model order changes it. |
+| **`Channel::retune()`** | foobar2000 has no automation, so rebuilding the pipeline on a preset change is acceptable there. A DAW moves sliders while audio runs, and `configure()` reallocates, which resets. `retune()` swaps in a config that needs the same buffers — everything except Max repair and Model order — with no discontinuity. |
+| **Dither** | Airwindows house style, on the 32-bit float path only. |
+
+The one thing that moved *into* the core is the flush-to-zero guard, which used
+to be a local class in `dsp_declick.cpp`. FTZ changes results in the last bits,
+so it is part of the numerical contract rather than an optimisation, and two
+ports that disagree about it are not comparable. It is now
+`declick::scoped_flush_denormals` and both wrappers hold one.
+
+### Checking that the two agree
+
+`processDoubleReplacing` is left undithered — that is the standard Airwindows
+arrangement, and it also makes it the path to compare. **`declick_vst_verify`**
+drives `declick::Channel` directly with the same `Config` and the same
+per-sample push/pull and requires the VST's 64-bit output to match to the bit;
+see [Verification](#verification). It runs on every build, on both
+architectures, and needs no SDK.
+
+Steinberg's `vst2.x` sources are not redistributable and are not here, so the
+VST itself cannot be built from a clean checkout — see
+`plugins/AirwindowsWinVSTTemplate.txt`. `tests/vst2_stub/audioeffectx.h` stands
+in for the parts of the API the Airwindows pattern touches, which is enough to
+run the DSP but **not** enough to prove the plug-in compiles in the real
+VSTProject. That still takes a build there.
 
 ---
 
@@ -625,6 +765,18 @@ source directly.
 * **Declick has not been evaluated on stereo vinyl**, only on mono 78s. It
   should work — the detector is per-channel and format-agnostic — but the
   thresholds were tuned on shellac.
+* **Declick's audio thread can still allocate in one case:** a caller pushing
+  more than `Config::maxBlock` — 16384 samples — between pulls. That grows the
+  output ring once, and then never again. Neither wrapper comes near it.
+  Everything else is reserved in `configure()`; see
+  [Real-time safety](#real-time-safety).
+* **A format change rebuilds Declick's channels from `on_chunk`.** A different
+  channel count or sample rate mid-stream constructs new `Channel` objects,
+  which allocates, on whatever thread foobar2000 called it from. It happens at
+  track boundaries rather than during steady playback, and foobar2000's own
+  `insert_chunk()` allocates on every chunk regardless, so the DSP is not the
+  binding constraint there. The VST has no equivalent path: it reconfigures in
+  place.
 * **ARM64EC is wired up in CMake but untested.**
 
 ---
