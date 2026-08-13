@@ -11,7 +11,8 @@
  *  foobar2000 must be installed (for shared.dll) and must match this build's
  *  architecture. If it is not, the test reports SKIPPED and succeeds.
  *
- *    component_smoke <path-to-foo_dsp_decrackle.dll> [foobar2000-directory]
+ *    component_smoke <path-to-component.dll> [foobar2000-directory]
+ *                    [--dialog <id>] [--slider <id>] [--label <id>]
  *                    [--screenshot <out.bmp>]
  * ======================================== */
 
@@ -25,6 +26,11 @@
 namespace {
 
 int g_failures = 0;
+
+// Which resource ids to poke; the two components number theirs differently.
+int g_dialogId = 101;
+int g_sliderId = 1001;
+int g_labelId  = 1011;
 
 void check(bool ok, const char * what) {
     std::printf("  %-58s %s\n", what, ok ? "ok" : "FAILED");
@@ -220,7 +226,7 @@ DWORD WINAPI dialogProbe(LPVOID param) {
     if (dlg == NULL) return 0;
     a->foundDialog = true;
 
-    const HWND slider = GetDlgItem(dlg, 1001 /* IDC_SLIDER_FILTER */);
+    const HWND slider = GetDlgItem(dlg, g_sliderId);
     if (slider != NULL) {
         a->foundSlider = true;
         // Drive the control the way the user would, then tell the dialog about
@@ -230,7 +236,7 @@ DWORD WINAPI dialogProbe(LPVOID param) {
                      MAKEWPARAM(SB_THUMBPOSITION, a->sliderPos), (LPARAM)slider);
 
         wchar_t label[64] = { 0 };
-        GetDlgItemTextW(dlg, 1011 /* IDC_VALUE_FILTER */, label, 64);
+        GetDlgItemTextW(dlg, g_labelId, label, 64);
         wchar_t expected[64];
         _snwprintf_s(expected, 64, _TRUNCATE, L"%.3f",
                      (double)a->sliderPos / 1000.0);
@@ -284,6 +290,12 @@ int wmain(int argc, wchar_t ** argv) {
     for (int i = 2; i < argc; ++i) {
         if (wcscmp(argv[i], L"--screenshot") == 0 && i + 1 < argc) {
             screenshot = argv[++i];
+        } else if (wcscmp(argv[i], L"--dialog") == 0 && i + 1 < argc) {
+            g_dialogId = _wtoi(argv[++i]);
+        } else if (wcscmp(argv[i], L"--slider") == 0 && i + 1 < argc) {
+            g_sliderId = _wtoi(argv[++i]);
+        } else if (wcscmp(argv[i], L"--label") == 0 && i + 1 < argc) {
+            g_labelId = _wtoi(argv[++i]);
         } else if (fb2kHint.empty()) {
             fb2kHint = argv[i];
         }
@@ -326,7 +338,7 @@ int wmain(int argc, wchar_t ** argv) {
     check(client->get_version() == FOOBAR2000_TARGET_VERSION,
           "client reports the expected API level (80 = fb2k 1.5+)");
 
-    check(FindResourceW(mod, MAKEINTRESOURCEW(101), (LPCWSTR)RT_DIALOG) != NULL,
+    check(FindResourceW(mod, MAKEINTRESOURCEW(g_dialogId), (LPCWSTR)RT_DIALOG) != NULL,
           "configuration dialog resource is present");
 
     // --- find our dsp_entry in the factory list -----------------------------

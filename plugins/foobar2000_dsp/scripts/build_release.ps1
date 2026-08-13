@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Builds the optimised release binaries and packages them as a single
+    Builds the optimised release binaries and packages each component as an
     installable .fb2k-component.
 
 .DESCRIPTION
     Configures and builds every requested architecture, runs the test suites,
-    then assembles one archive containing all of them:
+    then assembles one archive per component containing all of them:
 
         foo_dsp_decrackle.fb2k-component
           foo_dsp_decrackle.dll        <- 32 bit, used by foobar2000 1.5 - 2.x (x86)
@@ -14,6 +14,9 @@
     foobar2000 ignores subfolders it does not understand, so one file installs
     everywhere. Debug symbols go into a separate archive that is NOT part of
     the component - keep it around so foobar2000 crash reports can be resolved.
+
+.PARAMETER Component
+    Which components to build. Default: all of them.
 
 .PARAMETER Arch
     Which architectures to build. Default: x86 and x64.
@@ -50,6 +53,8 @@
 param(
     [ValidateSet('x86', 'x64')]
     [string[]] $Arch = @('x86', 'x64'),
+    [ValidateSet('foo_dsp_decrackle', 'foo_dsp_declick')]
+    [string[]] $Component = @('foo_dsp_decrackle', 'foo_dsp_declick'),
     [string]   $Toolset = '',
     [string]   $Generator = '',
     [ValidateSet('SSE2', 'AVX', 'AVX2')]
@@ -71,10 +76,13 @@ function Invoke-Checked([string] $what, [scriptblock] $action) {
     if ($LASTEXITCODE -ne 0) { throw "$what failed with exit code $LASTEXITCODE" }
 }
 
-# --- read the version out of version.h so the archive name matches the DLL ---
-$versionHeader = Join-Path $root 'foo_dsp_decrackle\version.h'
-$version = (Select-String -Path $versionHeader -Pattern 'VERSION_STRING\s+"([^"]+)"').Matches[0].Groups[1].Value
-Write-Host "foo_dsp_decrackle $version" -ForegroundColor Cyan
+# --- read each version out of version.h so archive names match the DLLs -----
+$versions = @{}
+foreach ($c in $Component) {
+    $h = Join-Path $root "$c\version.h"
+    $versions[$c] = (Select-String -Path $h -Pattern 'VERSION_STRING\s+"([^"]+)"').Matches[0].Groups[1].Value
+    Write-Host ("{0} {1}" -f $c, $versions[$c]) -ForegroundColor Cyan
+}
 
 foreach ($dir in @($stage, $symbols)) {
     if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
@@ -111,51 +119,53 @@ foreach ($a in $Arch) {
 
     # 32 bit goes at the archive root, 64 bit in x64\ - that is the layout
     # foobar2000 2.x expects, and 1.5 simply ignores the subfolder.
-    $subdir = if ($a -eq 'x64') { Join-Path $stage 'x64' } else { $stage }
-    New-Item -ItemType Directory -Force $subdir | Out-Null
+    foreach ($c in $Component) {
+        $subdir = if ($a -eq 'x64') { Join-Path $stage "$c\x64" } else { Join-Path $stage $c }
+        New-Item -ItemType Directory -Force $subdir | Out-Null
 
-    $built = Join-Path $buildDir 'foo_dsp_decrackle\Release\foo_dsp_decrackle.dll'
-    if (-not (Test-Path $built)) { throw "Expected output missing: $built" }
-    Copy-Item $built $subdir -Force
+        $built = Join-Path $buildDir "$c\Release\$c.dll"
+        if (-not (Test-Path $built)) { throw "Expected output missing: $built" }
+        Copy-Item $built $subdir -Force
 
-    $pdb = [System.IO.Path]::ChangeExtension($built, '.pdb')
-    if (Test-Path $pdb) {
-        $symDir = Join-Path $symbols $a
-        New-Item -ItemType Directory -Force $symDir | Out-Null
-        Copy-Item $pdb $symDir -Force
+        $pdb = [System.IO.Path]::ChangeExtension($built, '.pdb')
+        if (Test-Path $pdb) {
+            $symDir = Join-Path $symbols "$c\$a"
+            New-Item -ItemType Directory -Force $symDir | Out-Null
+            Copy-Item $pdb $symDir -Force
+        }
+
+        $info = Get-Item $built
+        Write-Host ("  {0,-18} {1,-4} {2,9:N0} bytes" -f $c, $a, $info.Length) -ForegroundColor Green
     }
-
-    $info = Get-Item $built
-    Write-Host ("  {0,-4} {1,9:N0} bytes" -f $a, $info.Length) -ForegroundColor Green
 }
 
 # --- package ---------------------------------------------------------------
-$componentPath = Join-Path $distDir "foo_dsp_decrackle-$version.fb2k-component"
-$symbolsPath   = Join-Path $distDir "foo_dsp_decrackle-$version-symbols.zip"
-foreach ($p in @($componentPath, $symbolsPath)) {
-    if (Test-Path $p) { Remove-Item -Force $p }
-}
-
 # Compress-Archive would work, but cmake -E tar produces the same zip on every
 # PowerShell version and is already a hard dependency here.
-Invoke-Checked 'packaging' {
-    & cmake -E chdir $stage cmake -E tar cf $componentPath --format=zip .
-}
-if (Get-ChildItem $symbols -Recurse -File -ErrorAction SilentlyContinue) {
-    Invoke-Checked 'packaging symbols' {
-        & cmake -E chdir $symbols cmake -E tar cf $symbolsPath --format=zip .
+Write-Host "`n=== Package ===" -ForegroundColor Cyan
+foreach ($c in $Component) {
+    $v = $versions[$c]
+    $componentPath = Join-Path $distDir "$c-$v.fb2k-component"
+    $symbolsPath   = Join-Path $distDir "$c-$v-symbols.zip"
+    foreach ($p in @($componentPath, $symbolsPath)) {
+        if (Test-Path $p) { Remove-Item -Force $p }
+    }
+    $src = Join-Path $stage $c
+    Invoke-Checked "packaging $c" {
+        & cmake -E chdir $src cmake -E tar cf $componentPath --format=zip .
+    }
+    $symSrc = Join-Path $symbols $c
+    if (Test-Path $symSrc) {
+        Invoke-Checked "packaging $c symbols" {
+            & cmake -E chdir $symSrc cmake -E tar cf $symbolsPath --format=zip .
+        }
+    }
+    Write-Host ("  {0}  ({1:N0} bytes)" -f $componentPath, (Get-Item $componentPath).Length) -ForegroundColor Green
+    & cmake -E tar tf $componentPath | ForEach-Object { Write-Host "      $_" }
+    if (Test-Path $symbolsPath) {
+        Write-Host ("  {0}  ({1:N0} bytes)" -f $symbolsPath, (Get-Item $symbolsPath).Length) -ForegroundColor DarkGray
     }
 }
-
-Write-Host "`n=== Package ===" -ForegroundColor Cyan
-Get-ChildItem $distDir -Filter "foo_dsp_decrackle-$version*" |
-    ForEach-Object { Write-Host ("  {0}  ({1:N0} bytes)" -f $_.FullName, $_.Length) -ForegroundColor Green }
-
-Write-Host @"
-
-Contents:
-"@
-& cmake -E tar tf $componentPath | ForEach-Object { Write-Host "  $_" }
 
 Write-Host @"
 

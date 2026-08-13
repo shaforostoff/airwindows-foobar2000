@@ -123,9 +123,15 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/fb2k_sdk.cmake")
 
 add_subdirectory(foo_dsp_decrackle)
+add_subdirectory(foo_dsp_declick)
 
 option(FOO_DSP_BUILD_TESTS "Build the DSP verification harness" ON)
 if(FOO_DSP_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+option(FOO_DSP_BUILD_TOOLS "Build the offline development utilities" ON)
+if(FOO_DSP_BUILD_TOOLS)
+    add_subdirectory(tools)
 endif()

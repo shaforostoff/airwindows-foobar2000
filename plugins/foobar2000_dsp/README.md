@@ -1,17 +1,42 @@
-# foo_dsp_decrackle
+# foobar2000 DSP components
 
-A foobar2000 DSP component wrapping the Airwindows **DeCrackle** algorithm —
-click and vinyl-crackle removal that leaves the rest of the audio alone.
+Two DSPs for restoring 78s and vinyl transfers:
 
-The DSP maths is a direct port of `plugins/WinVST/DeCrackle/DeCrackleProc.cpp`
-(the `processReplacing` path) and is verified **bit-identical** to it; see
-[Verification](#verification).
+| Component | What it is |
+| --- | --- |
+| **foo_dsp_decrackle** | A port of the Airwindows **DeCrackle** plug-in, verified **bit-identical** to the VST source. Best on stereo material. |
+| **foo_dsp_declick** | An autoregressive detect-and-interpolate declicker. **Use this one for mono shellac** — see [Which one to use](#which-one-to-use). |
 
-* Targets **foobar2000 1.5 and later**, 32-bit and 64-bit.
-* Builds with **CMake**, so any Visual Studio from 2017 15.7 onward works.
-* No dependency beyond the foobar2000 SDK, which is downloaded automatically.
-  No WTL, no ATL, no vcpkg, no 7-Zip.
-* Statically linked CRT — nothing to install alongside it.
+Both:
+
+* Target **foobar2000 1.5 and later**, 32-bit and 64-bit.
+* Build with **CMake**, so any Visual Studio from 2017 15.7 onward works.
+* Depend on nothing beyond the foobar2000 SDK, which is downloaded
+  automatically. No WTL, no ATL, no vcpkg, no 7-Zip.
+* Link the CRT statically — nothing to install alongside them.
+
+---
+
+## Which one to use
+
+They are not interchangeable, and the difference is structural rather than a
+matter of taste.
+
+**DeCrackle** decides a click is present by looking at `|L * R * 64|` — a
+measure of correlated energy that a one-channel surface tick fails to produce.
+On a **mono** transfer `L == R`, so that term collapses to `64x²`, which sits
+2.6–7.3× above `|x|` on typical 78 rpm material. The detector is then either
+silent or firing on 60% of samples, with nothing useful in between.
+
+It also repairs by crossfading to a lowpassed copy of the damaged audio, so
+during a click it outputs a smoothed version of the click rather than a
+reconstruction of the music underneath.
+
+**Declick** detects clicks as spikes in an autoregressive prediction residual —
+which works the same whether the source is mono or stereo — and repairs them by
+least-squares interpolation, reconstructing what the waveform should have been.
+
+Rough guide: **stereo vinyl → either; mono shellac → Declick.**
 
 ---
 
@@ -21,13 +46,14 @@ The DSP maths is a direct port of `plugins/WinVST/DeCrackle/DeCrackleProc.cpp`
 powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1
 ```
 
-That configures and builds x86 and x64 in Release, runs both test suites, and
+That configures and builds x86 and x64 in Release, runs the test suites, and
 writes to `dist/`:
 
 | File | What it is |
 | --- | --- |
-| `foo_dsp_decrackle-1.0.0.fb2k-component` | The installable component, both architectures in one file |
-| `foo_dsp_decrackle-1.0.0-symbols.zip` | PDBs — keep these, they are what makes a foobar2000 crash report readable |
+| `foo_dsp_decrackle-1.0.0.fb2k-component` | Installable component, both architectures in one file |
+| `foo_dsp_declick-1.0.0.fb2k-component` | Same, for the declicker |
+| `*-symbols.zip` | PDBs — keep these, they are what makes a foobar2000 crash report readable |
 
 Install by dragging the `.fb2k-component` onto foobar2000, or via
 **File → Preferences → Components → Install…**
@@ -47,6 +73,9 @@ file installs correctly on every version.
 ```powershell
 # Build only 64-bit
 .\scripts\build_release.ps1 -Arch x64
+
+# Build only one component
+.\scripts\build_release.ps1 -Component foo_dsp_declick
 
 # Supported Windows 7 build (see the note below)
 .\scripts\build_release.ps1 -Toolset v142
@@ -112,13 +141,40 @@ cmake -DFB2K_SDK_DEST=external/foobar2000_sdk -P cmake/fb2k_download_sdk.cmake
 | `FB2K_SDK_AUTO_DOWNLOAD` | `ON` | Fetch it if missing |
 | `FOO_DSP_STATIC_CRT` | `ON` | `/MT` instead of `/MD` |
 | `FOO_DSP_LTO` | `ON` | `/GL` + `/LTCG` in Release |
-| `FOO_DSP_ARCH` | `SSE2` | `SSE2`, `AVX` or `AVX2` |
+| `FOO_DSP_ARCH` | `SSE2` | `SSE2`, `AVX` or `AVX2` — see [Vectorization](#vectorization); leaving it at `SSE2` costs nothing |
 | `FOO_DSP_WIN32_WINNT` | `0x0601` | Minimum Windows version |
 | `FOO_DSP_BUILD_TESTS` | `ON` | Build the verification harnesses |
 
 ---
 
-## Parameters
+## Declick parameters
+
+Add *Declick (AR interpolation)* to the chain and press **Configure selected**.
+
+| | |
+| --- | --- |
+| **Sensitivity** | The one to reach for. Raise it until the crackle goes, then back off as soon as the music starts to dull. Maps onto the trigger threshold in robust sigmas: 0 → 6.0σ, 1 → 2.5σ. |
+| **Extent** | How far a detection spreads into its own tail before the repair stops. Raise it if repairs leave a residual tick behind them. |
+| **Max repair** | Longest single repair. Anything longer is treated as music and left alone. 4 ms suits 78s. |
+| **Passes** | A second pass catches clicks the first one uncovers; the model is refitted in between. Small but real gain, roughly 50% more CPU. |
+| **Model order** | Higher follows complex material more closely at some CPU cost. 32 suits most 78s. |
+| **Dry/Wet** | 0 bypasses. |
+
+| Sensitivity | samples repaired | events/s | collateral damage | HF change | precision |
+| --- | --- | --- | --- | --- | --- |
+| 0.00 | 0.7 % | 33 | −54.1 dB | −0.4 dB | 0.91 |
+| 0.30 | 1.6 % | 20 | −43.5 dB | −0.8 dB | 0.85 |
+| **0.60** (default) | ~3.5 % | ~14 | ~−39.5 dB | ~−1.4 dB | ~0.70 |
+| 0.70 | 4.8 % | 13 | −38.5 dB | −1.7 dB | 0.66 |
+| 0.85 | 7.9 % | 12 | −36.3 dB | −2.2 dB | 0.55 |
+| 1.00 | 14.5 % | 11 | −34.8 dB | −2.9 dB | 0.42 |
+
+Throughput: ~107× realtime at the default (about 1 % of one core on a modern desktop).
+Latency ~18 ms, reported to foobar2000 so visualisations stay in sync.
+
+---
+
+## DeCrackle parameters
 
 Reachable through **Preferences → Playback → DSP Manager**; add *DeCrackle
 (Airwindows)* to the active chain and press **Configure selected**.
@@ -155,10 +211,8 @@ stereo, Release, on a modern desktop:
 | x86 | defaults | 90.9 ms | 80.2 ms | 1.13× |
 | x86 | Surface off | 52.1 ms | 41.4 ms | 1.26× |
 
-That is ~650× realtime for the default x64 build — 0.15 % of one core. On a
-2014 MacBook Air (1.4 GHz Haswell) expect roughly a third of that, so still
-well under 1 %, and far below what the decoder itself costs. Memory is about
-64 kB per stereo pair.
+That is ~650× realtime for the default x64 build — 0.15 % of one core.
+Memory is about 64 kB per stereo pair.
 
 ### Vectorization
 
@@ -213,6 +267,10 @@ therefore the default and there is no reason to change it.
 
 None of these change the output — see below.
 
+`decrackle_core.cpp` keeps a plain scalar implementation alongside the SSE2
+one. It is the portable fallback, it is what the single-channel path uses, and
+the test harness runs both against the Airwindows source so neither can drift.
+
 ---
 
 ## Verification
@@ -225,10 +283,12 @@ ctest --test-dir build/x64 -C Release --output-on-failure
 `tests/decrackle_reference.h`, a verbatim copy of the Airwindows VST source
 used as an oracle. Across 12 parameter/sample-rate combinations × 5 signal
 types, fed in 1024-sample chunks so buffer boundaries are exercised, the worst
-deviation is **0.000e+00** — bit-identical, on both x86 and x64. It also:
+deviation is **0.000e+00** — bit-identical, on both x86 and x64, for both the
+SSE2 and the scalar path. It also:
 
 * feeds NaN, ±infinity, `1e30` and denormals in and checks the output stays
   finite and that clean audio afterwards comes back clean;
+* asserts the SSE2 and scalar paths agree to the bit;
 * sweeps every parameter across 21 steps × 14 sample rates from 1 kHz to
   20 MHz, checking buffer indices stay in bounds and nothing diverges;
 * checks the single-channel path against a duplicated-stereo run;
@@ -297,16 +357,21 @@ scripts/
   build_release.ps1               the release build + packaging entry point
   get_sdk.ps1                     wrapper around fb2k_download_sdk.cmake
 foo_dsp_decrackle/
-  decrackle_core.{h,cpp}          the DSP; no foobar2000 or Win32 dependency
+  decrackle_core.{h,cpp}          the DSP (scalar + SSE2); no foobar2000 or Win32 dependency
   dsp_decrackle.cpp               the foobar2000 DSP service
   decrackle_preset.{h,cpp}        preset serialisation
   config_dialog.cpp               plain Win32 configuration dialog
   component.cpp                   DECLARE_COMPONENT_VERSION
   foo_dsp_decrackle.rc            dialog template + version resource
+foo_dsp_declick/                  same layout, declick_core.{h,cpp} etc.
+tools/
+  decrackle_cli.cpp               offline WAV in / WAV out, for sweeps
+  declick_cli.cpp                 ditto for the declicker
+  wav_io.h                        minimal WAV reader/writer
 tests/
   decrackle_reference.h           verbatim Airwindows VST source, used as an oracle
   decrackle_verify.cpp            correctness, robustness, throughput
-  component_smoke.cpp             loads the DLL through the real SDK plumbing
+  component_smoke.cpp             loads a DLL through the real SDK plumbing
 external/                         the downloaded SDK (git-ignored)
 dist/                             release artefacts (git-ignored)
 ```
@@ -319,13 +384,22 @@ source directly.
 
 ## Known limitations
 
-* **No dark mode.** The configuration dialog is plain Win32. Following
+* **No dark mode.** The configuration dialogs are plain Win32. Following
   foobar2000 2.x's dark mode means `fb2k::CDarkModeHooks`, which pulls in
   libPPUI and WTL — WTL is not in the SDK archive and would have to be
-  downloaded separately. The dialog was kept dependency-free instead.
-* **The tail is not flushed.** Like the VST, the last few milliseconds sitting
-  in the delay line at end of playback are not emitted. Flushing them would add
-  samples to the stream and break gapless playback.
+  downloaded separately. The dialogs were kept dependency-free instead.
+* **DeCrackle does not flush its tail.** Like the VST, the last few
+  milliseconds sitting in its delay line at end of playback are not emitted.
+  Flushing them would add samples to the stream and break gapless playback.
+  (Declick does flush, so its stream length is preserved.)
+* **Declick's C++ core is not a line-by-line port of the Python prototype** in
+  `scratchpad/tune/`. It is an independent implementation of the same method
+  with a different block and noise-estimate structure; the two agree on roughly
+  the same clicks but not sample for sample. The C++ version is the one that
+  was calibrated, and the figures above are its own.
+* **Declick has not been evaluated on stereo vinyl**, only on mono 78s. It
+  should work — the detector is per-channel and format-agnostic — but the
+  thresholds were tuned on shellac.
 * **ARM64EC is wired up in CMake but untested.**
 
 ---

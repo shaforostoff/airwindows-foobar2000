@@ -1,0 +1,76 @@
+// foo_dsp_declick - resources
+
+#include <windows.h>
+#include <commctrl.h>
+#include "resource.h"
+#include "version.h"
+
+/////////////////////////////////////////////////////////////////////////////
+// Configuration dialog
+
+IDD_DECLICK DIALOGEX 0, 0, 292, 194
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Declick"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Sensitivity",IDC_STATIC,7,12,52,8
+    CONTROL         "",IDC_SLIDER_SENSITIVITY,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,9,178,15
+    RTEXT           "0.600",IDC_VALUE_SENSITIVITY,244,12,41,8
+
+    LTEXT           "Extent",IDC_STATIC,7,34,52,8
+    CONTROL         "",IDC_SLIDER_EXTENT,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,31,178,15
+    RTEXT           "0.500",IDC_VALUE_EXTENT,244,34,41,8
+
+    LTEXT           "Max repair",IDC_STATIC,7,56,52,8
+    CONTROL         "",IDC_SLIDER_MAXLEN,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,53,178,15
+    RTEXT           "4.0 ms",IDC_VALUE_MAXLEN,244,56,41,8
+
+    LTEXT           "Passes",IDC_STATIC,7,78,52,8
+    CONTROL         "",IDC_SLIDER_PASSES,"msctls_trackbar32",TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP,62,75,178,15
+    RTEXT           "2",IDC_VALUE_PASSES,244,78,41,8
+
+    LTEXT           "Model order",IDC_STATIC,7,100,52,8
+    CONTROL         "",IDC_SLIDER_ORDER,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,97,178,15
+    RTEXT           "32",IDC_VALUE_ORDER,244,100,41,8
+
+    LTEXT           "Dry/Wet",IDC_STATIC,7,122,52,8
+    CONTROL         "",IDC_SLIDER_DRYWET,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,119,178,15
+    RTEXT           "1.000",IDC_VALUE_DRYWET,244,122,41,8
+
+    LTEXT           "Sensitivity is the one to reach for. Raise it until the crackle goes, then back off as soon as the music starts to dull.",
+                    IDC_HINT,7,142,278,18
+
+    PUSHBUTTON      "&Defaults",IDC_DEFAULTS,7,171,54,15
+    DEFPUSHBUTTON   "OK",IDOK,177,171,54,15
+    PUSHBUTTON      "Cancel",IDCANCEL,235,171,50,15
+END
+
+/////////////////////////////////////////////////////////////////////////////
+// Version
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION FOO_DSP_DECLICK_VERSION_COMMA
+ PRODUCTVERSION FOO_DSP_DECLICK_VERSION_COMMA
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS__WINDOWS32
+ FILETYPE VFT_DLL
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "Declick DSP for foobar2000 (AR interpolation)"
+            VALUE "FileVersion",     FOO_DSP_DECLICK_VERSION_STRING
+            VALUE "InternalName",    "foo_dsp_declick"
+            VALUE "OriginalFilename","foo_dsp_declick.dll"
+            VALUE "ProductName",     "foo_dsp_declick"
+            VALUE "ProductVersion",  FOO_DSP_DECLICK_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

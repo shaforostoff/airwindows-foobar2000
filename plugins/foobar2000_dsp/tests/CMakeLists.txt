@@ -53,11 +53,16 @@ else()
                 "${FB2K_RUNTIME_DIR}/shared.dll" "$<TARGET_FILE_DIR:component_smoke>/"
         VERBATIM)
 
-    add_dependencies(component_smoke foo_dsp_decrackle)
-    add_test(NAME component_smoke
-             COMMAND component_smoke "$<TARGET_FILE:foo_dsp_decrackle>" "${FB2K_RUNTIME_DIR}")
-    # The dialog part opens a real modal window; do not let it wedge CI.
-    set_tests_properties(component_smoke PROPERTIES TIMEOUT 120)
+    add_dependencies(component_smoke foo_dsp_decrackle foo_dsp_declick)
+
+    add_test(NAME smoke_decrackle
+             COMMAND component_smoke "$<TARGET_FILE:foo_dsp_decrackle>" "${FB2K_RUNTIME_DIR}"
+                     --dialog 101 --slider 1001 --label 1011)
+    add_test(NAME smoke_declick
+             COMMAND component_smoke "$<TARGET_FILE:foo_dsp_declick>" "${FB2K_RUNTIME_DIR}"
+                     --dialog 201 --slider 2001 --label 2011)
+    # These open a real modal window; do not let them wedge CI.
+    set_tests_properties(smoke_decrackle smoke_declick PROPERTIES TIMEOUT 120)
     set_target_properties(component_smoke PROPERTIES FOLDER "tests")
 endif()
 
