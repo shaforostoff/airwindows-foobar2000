@@ -1,13 +1,14 @@
 # foobar2000 DSP components
 
-Two DSPs for restoring 78s and vinyl transfers:
+Three DSPs for restoring 78s and vinyl transfers:
 
 | Component | What it is |
 | --- | --- |
 | **foo_dsp_decrackle** | A port of the Airwindows **DeCrackle** plug-in, verified **bit-identical** to the VST source. Best on stereo material. |
 | **foo_dsp_declick** | An autoregressive detect-and-interpolate declicker. **Use this one for mono shellac** — see [Which one to use](#which-one-to-use). |
+| **foo_dsp_dehum** | Finds continuous narrowband tones by itself and cancels them. For hum, which is a different defect from clicks and needs a different instrument. Zero latency. |
 
-Both:
+All three:
 
 * Target **foobar2000 1.5 and later**, 32-bit and 64-bit.
 * Build with **CMake**, so any Visual Studio from 2017 15.7 onward works.
@@ -38,6 +39,10 @@ least-squares interpolation, reconstructing what the waveform should have been.
 
 Rough guide: **stereo vinyl → either; mono shellac → Declick.**
 
+**Dehum is not an alternative to either of them.** Clicks are impulsive and
+broadband, hum is continuous and narrowband, and nothing that detects one will
+find the other. Run Dehum alongside whichever declicker suits the material.
+
 ---
 
 ## Building a release package
@@ -53,6 +58,7 @@ writes to `dist/`:
 | --- | --- |
 | `foo_dsp_decrackle-1.0.0.fb2k-component` | Installable component, both architectures in one file |
 | `foo_dsp_declick-1.0.0.fb2k-component` | Same, for the declicker |
+| `foo_dsp_dehum-1.0.0.fb2k-component` | Same, for the dehummer |
 | `*-symbols.zip` | PDBs — keep these, they are what makes a foobar2000 crash report readable |
 
 Install by dragging the `.fb2k-component` onto foobar2000, or via
@@ -619,6 +625,207 @@ it.
 
 ---
 
+## Dehum parameters
+
+Add *Dehum (line detection)* to the chain and press **Configure selected**.
+
+| | |
+| --- | --- |
+| **Sensitivity** | How prominent a line has to be. 0 → 22 dB, 1 → 10 dB; the default 0.5 is 16 dB. Raise it if hum survives, lower it if music is being touched. |
+| **Bandwidth** | Half width of each notch, 0.1–5 Hz. Wider catches a drifting line at the cost of more music around it. |
+| **Search to** | Top of the range searched automatically, 40–500 Hz. The bottom is fixed at 16 Hz. |
+| **Harmonics** | Multiples of each detected line to cancel as well, 1–8. Locked to exact multiples of the fundamental, not tracked separately. |
+| **Frequency** | 0 = detect automatically. Anything else pins the fundamental there and turns the detector off. **This is the control to use if you already know the frequency**, because it acts immediately where detection needs a few seconds. |
+| **Rumble** | 0 = off, otherwise a 4th-order Butterworth high-pass. Broadband low-frequency noise is a *different defect* from hum — see below — and this is the control for it. |
+| **Dry/Wet** | 0 bypasses, bit-exactly. |
+
+Latency is **zero**: the detector reads the signal but does not sit in the path,
+so the component processes in place and needs no FIFO. Throughput is **159×
+realtime** on x64 and 146× on x86, measured end to end over 177 s of 44.1 kHz
+mono including file I/O. Memory is **2.0 MB per channel** at 44.1 kHz and 3.9 MB
+at 96 kHz, fixed at `configure()` and independent of the parameters.
+
+### The material this was calibrated on
+
+Two 78 rpm transfers with audible hum, each paired with a **transfer of the same
+performance from a different disc** that has none — the same ground-truth trick
+the declicker uses. Measuring the pairs first turned out to matter, because it
+showed that the two files do not have the same defect:
+
+| ⅓-octave band | cachirulo m4a | its control | la tablada m4a | its control |
+| --- | --- | --- | --- | --- |
+| 32–45 Hz | **−41.0** | −59.0 | **−39.6** | −67.3 |
+| 45–63 Hz | **−36.9** | −58.4 | −48.9 | −64.2 |
+| 63–90 Hz | −32.0 | −42.5 | −43.4 | −56.0 |
+| 125–250 Hz | −29.1 | −30.7 | −28.1 | −28.7 |
+
+*La tablada* has a genuine hum: a single line at **41.3 Hz**, 38 dB above the
+clean transfer at that bin and stable to ±0.02 Hz across the whole side.
+*Cachirulo* has **no line at all** — its excess is smooth across 33–62 Hz, which
+is turntable rumble. That is why Rumble exists as a separate control, and why it
+is off by default: it is not hum, and whether to filter it is a judgement about
+the transfer.
+
+Note also that neither line is at 50 or 60 Hz, and the two differ from each
+other. A speed-corrected transfer moves whatever was on the disc along with the
+music, so **a fixed-frequency notch is the wrong instrument here** and the
+detector is not a convenience.
+
+### Why detection is a duty cycle test, not a threshold
+
+The obvious design — flag whatever stands out from the local spectrum — does not
+work, and the reason is worth recording because it looks like it should.
+
+Prominence measured against a ±20 Hz median baseline, over the whole of each
+side:
+
+| | at the hum line | loudest momentary peak anywhere in 16–150 Hz |
+| --- | --- | --- |
+| la tablada (hum) | median **19.0** dB, 5th pct 14.2 | 28.2 |
+| la tablada (control) | median 0.1 dB | **21.7** |
+| cachirulo (control) | — | **22.3** |
+
+**The distributions overlap.** Catching the line continuously needs a threshold
+around 14 dB; never firing on a hum-free control needs one above 22. There is no
+value that does both, and an early revision that used one duly detected a
+sustained bandoneón E4 at 329 Hz as hum — *in both transfers of the same piece* —
+and cancelled it.
+
+What separates them is not level but persistence. At a 16 dB threshold:
+
+| | best duty cycle any frequency reaches | highest evidence score |
+| --- | --- | --- |
+| la tablada (hum) | **87.0%** at 41.05 Hz | **48** (saturated) |
+| la tablada (control) | 10.2% | 16 |
+| cachirulo (rumble) | 2.1% | 9 |
+| cachirulo (control) | 3.3% | 13 |
+
+So a candidate scores +1 per hop it is prominent, plus a quarter for each dB
+past the threshold, and −2 per hop it is not. Anything below a two-thirds duty
+cycle drifts to zero and stays there; the real line saturates. Cancellation
+starts at 24, which sits in the gap with a factor of 1.5 on either side. At
+1 up and 1 down instead, a 50% duty cycle is a random walk that reaches any
+threshold eventually.
+
+Two consequences worth knowing:
+
+* **It takes about 5 seconds of a track to engage** — 1.5 s to fill the analysis
+  window, then ~19 hops of evidence. That is the price of the test, and it is
+  what **Frequency** is for.
+* Once engaged, a line is held on much weaker evidence than it took to establish
+  (6 dB lower, and a miss costs 0.25 instead of 2). Without that the line was
+  acquired and dropped **ten times** over one side and removal was intermittent.
+  Hum does not come and go; a gap in the evidence means the music got loud.
+
+### Why the window is 1.5 seconds
+
+A coherent line's FFT peak grows with the window length while noise and music
+grow with its square root, so prominence separates them 3 dB better per
+doubling. Measured on the reference transfers:
+
+| analysis window | the 41.3 Hz line | loudest music peak |
+| --- | --- | --- |
+| 0.37 s | 24.7 dB | 19–22 dB |
+| 0.74 s | 26.8 dB | 19–22 dB |
+| **1.49 s** | **28.2 dB** | 19–22 dB |
+
+The line gains 3.5 dB, the music gains nothing. The same length gives the
+0.67 Hz bins the notch has to be placed on. Hopping more often does *not* make
+the detector decide sooner — successive frames overlap more, so they are that
+much more correlated and the evidence counter has to be raised in step. That was
+measured at a sixteenth of the window and bought nothing but FFTs.
+
+### The notch, and why the tracker matters more than anything else
+
+Each line is removed by heterodyning it to DC, lowpassing to recover its complex
+amplitude, and subtracting it back:
+
+```
+z = x * exp(-i*theta)
+w += lam * (z - w)                 lam = 2*pi*bandwidth/rate
+y = x - 2*Re{w * exp(i*theta)}
+```
+
+`theta` is a deterministic phase ramp, so nothing here adapts on the signal:
+it is a linear time-invariant notch that cannot ring or go unstable, and away
+from the line the response is `|d|/sqrt(d² + bandwidth²)` — a partial 5 Hz away
+loses **0.24 dB** at the default 1 Hz. Its depth is not infinite: heterodyning
+also puts an image at −2f₀, and what the one-pole passes of that lands back on
+f₀, so the floor is `bandwidth/(2·f0)`, i.e. −40 dB at 50 Hz. Measured at 0.3, 1
+and 3 Hz the depths are −50.5, −40.0 and −30.5 dB, matching that to the decimal.
+
+Because the notch is narrow, **placing it is the whole problem**. The detector's
+own estimate is good to a few tenths of a hertz, and a few tenths is enough to
+ruin it. So the frequency is refined from the rotation of `w`: an error `d`
+makes it rotate at `d` Hz, so reading its phase advance measures `d` directly.
+
+| starting error | without tracking | with tracking |
+| --- | --- | --- |
+| 0.2 Hz | −14.7 dB | — |
+| 0.5 Hz | −7.2 dB | locks to 0.009 Hz, **−91.7 dB** |
+| 1.2 Hz | −3.1 dB | locks to 0.003 Hz, **−38.4 dB** |
+
+Two details that are not optional:
+
+* **The interval has to be long.** A quarter second turns a 0.1 Hz error into
+  0.157 radians. Done per block instead it is 0.004 radians, which is noise —
+  and the first prototype duly random-walked the notch 2 Hz off the line and
+  left the hum untouched.
+* **It has to stop when there is nothing to read.** In a run-out groove the
+  weight collapses to noise and the reading becomes a random walk again, so the
+  weight is compared against its own recent peak and the tracker freezes below
+  30% of it.
+
+### What it does to the reference material
+
+Median-over-time spectrum around the line, at the defaults:
+
+| Hz | original | processed | pinned at 41.3 |
+| --- | --- | --- | --- |
+| 40.71 | −46.1 | −52.8 | −54.7 |
+| 41.05 | −41.4 | −52.8 | −57.3 |
+| **41.38** | **−39.6** | **−52.9** | **−57.1** |
+| 41.72 | −42.9 | −51.9 | −53.3 |
+| 42.06 | −47.4 | −52.1 | −52.9 |
+| 43.40 | −55.1 | −56.3 | −56.4 |
+
+The line is gone: what is left at 41.38 sits at the level of its neighbours.
+It cannot go lower than that, because the rumble pedestal underneath it is at
+about −52 — which is also why a naive "reduction at the line" figure tops out
+around 13 dB no matter how good the cancellation is. Pinning the frequency does
+slightly better than detecting it (the notch is exactly on the line from the
+first sample) and dips below the pedestal.
+
+On the **controls** — the hum-free transfers of the same two performances — the
+detector confirms **no lines at all** and the output is bit-identical to the
+input. That is the result that matters most: a restoration tool that fires on
+clean material is worse than none.
+
+On **cachirulo**, which has rumble and no line, the defaults also do nothing.
+`Rumble` at 60 Hz is the control for it:
+
+| band | input | with Rumble 60 Hz | its clean control |
+| --- | --- | --- | --- |
+| 20–32 Hz | −52.1 | **−72.1** | −58.3 |
+| 32–45 Hz | −39.5 | **−52.4** | −57.4 |
+| 45–63 Hz | −36.3 | **−41.3** | −56.7 |
+| 63–90 Hz | −33.2 | −33.9 | −43.7 |
+| 90 Hz and up | unchanged | unchanged | |
+
+### What Dehum will not do
+
+* **Nothing happens for the first few seconds of a track**, for the reason
+  above. Use **Frequency** when the hum is known.
+* **A hum whose fundamental is weak but whose harmonics are strong** — a buzz
+  rather than a hum — will not be found by searching for the fundamental. Pin it
+  with **Frequency** and raise **Harmonics**.
+* **Detection is per channel.** On a stereo transfer where the hum is common to
+  both, each channel finds it independently and they may engage a hop or two
+  apart. Nothing has been measured about whether that is audible.
+* **Only tested on mono 78 rpm transfers**, like the declicker.
+
+---
+
 ## DeCrackle parameters
 
 Reachable through **Preferences → Playback → DSP Manager**; add *DeCrackle
@@ -778,6 +985,32 @@ mappings; and the preset chunk, including pinning out-of-range stored values.
 Built against `tests/vst2_stub`, so it needs no SDK — with the caveat noted
 above about what that does not establish.
 
+**`dehum_verify`** checks the dehummer against independent references rather
+than against itself. The hand-rolled FFT is pinned by requiring tones placed on
+known bin centres to be detected there to within 0.15 Hz — a transposed
+butterfly, a wrong twiddle sign or a bad real-input unpack all move the peak. The
+notch depth is checked against its *analytic* floor `bandwidth/(2·f0)` rather
+than an arbitrary threshold, so it fails if the lowpass coefficient is wrong in
+either direction; measured −50.5, −40.0 and −30.5 dB at 0.3, 1 and 3 Hz against
+predictions of −50.5, −40.0 and −30.5. The frequency tracker is driven from four
+starting offsets up to 1.2 Hz and required to converge within 0.1 Hz. The rumble
+filter is compared with the closed-form Butterworth response at five
+frequencies, to within 1.5 dB. It also covers: detection and removal end to end
+on synthetic hum, with the removed signal required to be **100% the line
+itself**; clean material with recurring notes, where nothing may be detected and
+the output must come back bit-identical; dry/wet 0 as a bit-exact bypass; the
+same output for block sizes from 1 to 65536; NaN, ±infinity, `1e30` and denormals
+in with finite audio out and full recovery afterwards; six sample rates from
+8 kHz to 192 kHz; and that every parameter move can be retuned live while a
+sample rate change cannot.
+
+**`dehum_rt_verify`** counts heap allocations on the processing path and requires
+zero — a sharper question here than for the declicker, because a whole
+FFT-based detector runs on the audio thread. It covers 37 s of steady
+processing, a 65536-sample block, 4096 single-sample calls, 21 live parameter
+changes, `flush()`, `reset()` and manual mode, and prints the footprint before
+and after so a regression shows up in the log. All zero, 2073 kB either side.
+
 **`preset_roundtrip`** saves each component's parameters to a `dsp_preset` and
 reads them back, checking every field individually with values chosen so that a
 field read out of position cannot pass by accident. It also covers the
@@ -863,9 +1096,12 @@ foo_dsp_decrackle/
   component.cpp                   DECLARE_COMPONENT_VERSION
   foo_dsp_decrackle.rc            dialog template + version resource
 foo_dsp_declick/                  same layout, declick_core.{h,cpp} etc.
+foo_dsp_dehum/                    same layout, dehum_core.{h,cpp} etc.
 tools/
   decrackle_cli.cpp               offline WAV in / WAV out, for sweeps
   declick_cli.cpp                 ditto for the declicker
+  dehum_cli.cpp                   ditto for the dehummer; also reports the lines
+                                  it found and where the tracker put them
   wav_io.h                        minimal WAV reader/writer
 tests/
   decrackle_reference.h           verbatim Airwindows VST source, used as an oracle
@@ -873,6 +1109,8 @@ tests/
   declick_verify.cpp              AR linear algebra vs. dense brute force
   declick_rt_verify.cpp           counts audio-thread allocations, requires zero
   declick_vst_verify.cpp          the WinVST port vs. the core it shares
+  dehum_verify.cpp                FFT, notch, tracker and detector vs. references
+  dehum_rt_verify.cpp             ditto for the dehummer's audio thread
   vst2_stub/audioeffectx.h        our own minimal VST 2.4 declarations, so the above
                                   builds without Steinberg's SDK
   preset_roundtrip.cpp            parameters survive save/load, both components
@@ -951,6 +1189,9 @@ VSTProject. That still takes a build there.
 
 ## Known limitations
 
+* **Dehum needs a few seconds of a track before it acts**, its detection is per
+  channel, and a buzz whose fundamental is weak will not be found by searching
+  for the fundamental — see [What Dehum will not do](#what-dehum-will-not-do).
 * **No dark mode.** The configuration dialogs are plain Win32. Following
   foobar2000 2.x's dark mode means `fb2k::CDarkModeHooks`, which pulls in
   libPPUI and WTL — WTL is not in the SDK archive and would have to be

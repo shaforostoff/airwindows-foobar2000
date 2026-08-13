@@ -14,6 +14,7 @@
 
 #include "../foo_dsp_declick/declick_preset.h"
 #include "../foo_dsp_decrackle/decrackle_preset.h"
+#include "../foo_dsp_dehum/dehum_preset.h"
 
 #include <stdio.h>
 
@@ -156,6 +157,63 @@ int main() {
         checkNear(got.threshold, p.threshold, "threshold");
         checkNear(got.surface,   p.surface,   "surface");
         checkNear(got.dryWet,    p.dryWet,    "dryWet");
+    }
+
+    // 8. And for dehum. Values are deliberately all different from each other
+    //    and from the defaults, so a field read out of position cannot pass.
+    {
+        using dehum::Params;
+        Params p;
+        p.sensitivity = 0.3125f;
+        p.bandwidth   = 2.375f;
+        p.searchTo    = 275.0f;
+        p.harmonics   = 6;
+        p.frequency   = 123.5f;
+        p.rumbleHz    = 47.0f;
+        p.dryWet      = 0.8125f;
+        p.sanitize();
+
+        dsp_preset_impl preset;
+        dehum_preset::make(p, preset);
+        const Params got = dehum_preset::parse(preset);
+
+        printf("dehum round-trip\n");
+        checkNear(got.sensitivity, p.sensitivity, "sensitivity");
+        checkNear(got.bandwidth,   p.bandwidth,   "bandwidth");
+        checkNear(got.searchTo,    p.searchTo,    "searchTo");
+        checkNear(got.frequency,   p.frequency,   "frequency");
+        checkNear(got.rumbleHz,    p.rumbleHz,    "rumbleHz");
+        checkNear(got.dryWet,      p.dryWet,      "dryWet");
+        check(got.harmonics == p.harmonics, "harmonics");
+
+        // Frequency and Rumble both have an off value of 0 that sits outside
+        // their live ranges; sanitize() must leave it alone rather than clamping
+        // it up to the bottom of the range, or "auto" would become "pinned at
+        // 10 Hz" on every save.
+        Params off = Params::defaults();
+        off.frequency = 0.0f;
+        off.rumbleHz = 0.0f;
+        dsp_preset_impl p2;
+        dehum_preset::make(off, p2);
+        const Params back = dehum_preset::parse(p2);
+        checkNear(back.frequency, 0.0f, "frequency 0 survives as automatic");
+        checkNear(back.rumbleHz,  0.0f, "rumble 0 survives as off");
+
+        // A preset owned by something else, and a truncated one.
+        dsp_preset_impl foreign;
+        GUID other = dehum_preset::guid();
+        other.Data1 ^= 1;
+        foreign.set_owner(other);
+        foreign.set_data("junk", 4);
+        check(dehum_preset::parse(foreign) == Params::defaults(),
+              "a foreign preset falls back to the defaults");
+
+        dsp_preset_impl short_;
+        dsp_preset_builder b;
+        b << (t_uint32)dehum_preset::version << 0.5f;   // and nothing else
+        b.finish(dehum_preset::guid(), short_);
+        check(dehum_preset::parse(short_) == Params::defaults(),
+              "a truncated preset falls back to the defaults");
     }
 
     if (g_failures == 0) { printf("\nOK\n"); return 0; }

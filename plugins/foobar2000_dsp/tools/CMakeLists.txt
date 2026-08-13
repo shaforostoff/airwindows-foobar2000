@@ -33,3 +33,19 @@ if(MSVC)
 endif()
 
 set_target_properties(declick_cli PROPERTIES FOLDER "tools")
+
+add_executable(dehum_cli
+    dehum_cli.cpp
+    wav_io.h
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_dehum/dehum_core.cpp"
+)
+
+target_include_directories(dehum_cli PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_dehum")
+
+if(MSVC)
+    target_compile_options(dehum_cli PRIVATE /W4)
+endif()
+
+set_target_properties(dehum_cli PROPERTIES FOLDER "tools")

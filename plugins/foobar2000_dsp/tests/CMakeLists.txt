@@ -10,6 +10,10 @@
 #   declick_vst_verify - the WinVST port of the declicker vs. the core it
 #                        shares with this one. Built against tests/vst2_stub,
 #                        not Steinberg's SDK. No SDK.
+#   dehum_verify       - the dehummer's FFT, notch, frequency tracker and
+#                        detector against independent references. No SDK.
+#   dehum_rt_verify    - same allocation count for the dehummer, whose detector
+#                        runs on the audio thread. No SDK.
 #   preset_roundtrip   - every parameter survives save/load. Links the SDK, so
 #                        it needs foobar2000's shared.dll; skips if absent.
 #   component_smoke    - loads the built DLL through foobar2000's own service
@@ -75,6 +79,45 @@ add_test(NAME declick_rt_verify COMMAND declick_rt_verify)
 set_target_properties(declick_rt_verify PROPERTIES FOLDER "tests")
 
 # ---------------------------------------------------------------------------
+# The dehummer: the hand-rolled FFT, the notch depth against its analytic floor,
+# the frequency tracker against tones of known frequency, and the detector
+# against material with and without a line in it. No SDK.
+
+add_executable(dehum_verify
+    dehum_verify.cpp
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_dehum/dehum_core.cpp"
+)
+
+target_include_directories(dehum_verify PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_dehum")
+
+if(MSVC)
+    target_compile_options(dehum_verify PRIVATE /W4)
+endif()
+
+add_test(NAME dehum_verify COMMAND dehum_verify)
+set_target_properties(dehum_verify PROPERTIES FOLDER "tests")
+
+# ---------------------------------------------------------------------------
+# Dehum's audio thread must not touch the heap either - and it has more to get
+# wrong, since a whole FFT detector runs on it. No SDK.
+
+add_executable(dehum_rt_verify
+    dehum_rt_verify.cpp
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_dehum/dehum_core.cpp"
+)
+
+target_include_directories(dehum_rt_verify PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_dehum")
+
+if(MSVC)
+    target_compile_options(dehum_rt_verify PRIVATE /W4)
+endif()
+
+add_test(NAME dehum_rt_verify COMMAND dehum_rt_verify)
+set_target_properties(dehum_rt_verify PROPERTIES FOLDER "tests")
+
+# ---------------------------------------------------------------------------
 # The WinVST port of the declicker, against the core it shares with this tree.
 #
 # It compiles the WinVST folder's OWN copy of declick_core.cpp, deliberately:
@@ -138,12 +181,15 @@ add_executable(preset_roundtrip
     "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_declick/declick_core.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_decrackle/decrackle_preset.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_decrackle/decrackle_core.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_dehum/dehum_preset.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_dehum/dehum_core.cpp"
 )
 
 target_include_directories(preset_roundtrip PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_declick"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_decrackle")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_decrackle"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_dehum")
 
 target_link_libraries(preset_roundtrip PRIVATE fb2k::sdk)
 
@@ -184,7 +230,7 @@ else()
                 "${FB2K_RUNTIME_DIR}/shared.dll" "$<TARGET_FILE_DIR:component_smoke>/"
         VERBATIM)
 
-    add_dependencies(component_smoke foo_dsp_decrackle foo_dsp_declick)
+    add_dependencies(component_smoke foo_dsp_decrackle foo_dsp_declick foo_dsp_dehum)
 
     add_test(NAME smoke_decrackle
              COMMAND component_smoke "$<TARGET_FILE:foo_dsp_decrackle>" "${FB2K_RUNTIME_DIR}"
@@ -192,8 +238,12 @@ else()
     add_test(NAME smoke_declick
              COMMAND component_smoke "$<TARGET_FILE:foo_dsp_declick>" "${FB2K_RUNTIME_DIR}"
                      --dialog 201 --slider 2001 --label 2011)
+    add_test(NAME smoke_dehum
+             COMMAND component_smoke "$<TARGET_FILE:foo_dsp_dehum>" "${FB2K_RUNTIME_DIR}"
+                     --dialog 301 --slider 3001 --label 3011)
     # These open a real modal window; do not let them wedge CI.
-    set_tests_properties(smoke_decrackle smoke_declick PROPERTIES TIMEOUT 120)
+    set_tests_properties(smoke_decrackle smoke_declick smoke_dehum
+                         PROPERTIES TIMEOUT 120)
     set_target_properties(component_smoke PROPERTIES FOLDER "tests")
 endif()
 
