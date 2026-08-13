@@ -404,8 +404,26 @@ void testStreaming() {
             }
         }
         const double red = 10.0 * log10((before + 1e-300) / (after + 1e-300));
-        printf("  injected click energy reduced by %.1f dB\n", red);
-        if (!(red > 3.0)) { printf("  FAIL  clicks are not being removed\n"); ++g_failures; }
+
+        // The repair subtracts Config::wienerMax of the discrepancy, so with a
+        // perfect estimate the click can only shrink by -20*log10(1 - wienerMax)
+        // - about 5.2 dB at the calibrated 0.45. Checking against that ceiling
+        // rather than against a loose floor is what makes this test mean
+        // something: it says the interpolation is accurate enough that the
+        // deliberate subtraction fraction is the only thing holding it back.
+        Config probe2;
+        probe2.compute(p, sr);
+        const double ceiling = -20.0 * log10(1.0 - probe2.wienerMax);
+        printf("  injected click energy reduced by %.1f dB (ceiling for a"
+               " %.2f subtraction is %.1f dB)\n", red, probe2.wienerMax, ceiling);
+        if (!(red > ceiling - 1.0)) {
+            printf("  FAIL  well short of the subtraction ceiling\n");
+            ++g_failures;
+        }
+        if (!(red < ceiling + 0.5)) {
+            printf("  FAIL  above the subtraction ceiling, which is impossible\n");
+            ++g_failures;
+        }
     }
 
     // Hostile input: nothing non-finite may escape, and clean audio afterwards
@@ -454,6 +472,89 @@ void testStreaming() {
     }
 }
 
+//! Every supported model order, through the real streaming path.
+//!
+//! The inner products are vectorised with a tail: eight doubles per iteration,
+//! then two, then one. `order + 1` taps and `n - d` autocorrelation lengths hit
+//! every residue class, so sweeping the order is what covers the tail
+//! arithmetic. A mistake there would be silent - a wrong last tap still
+//! produces plausible audio - so this checks reconstruction actually works at
+//! each order rather than merely that nothing crashed.
+void testOrderSweep() {
+    printf("every model order through the streaming path\n");
+    const double sr = 44100.0;
+    const size_t N = 16384;
+
+    std::vector<double> clean(N);
+    Rng rng(2024u);
+    for (size_t i = 0; i < N; ++i) {
+        const double t = (double)i / sr;
+        clean[i] = 0.30 * sin(6.283185307 * 392.0 * t)
+                 + 0.12 * sin(6.283185307 * 987.0 * t)
+                 + 0.01 * rng.centred();
+    }
+    std::vector<double> dirty = clean;
+    std::vector<size_t> at;
+    for (size_t i = 3000; i + 3000 < N; i += 611) {
+        const int len = 2 + (int)(rng.uniform() * 5.0);
+        const double amp = 0.30 + 0.4 * rng.uniform();
+        for (int k = 0; k < len && i + (size_t)k < N; ++k) {
+            dirty[i + (size_t)k] += amp * ((k & 1) ? -1.0 : 1.0);
+        }
+        at.push_back(i);
+    }
+
+    double worstRed = 1e9;
+    int worstOrder = 0, checked = 0;
+    for (int order = (int)kMinOrder; order <= (int)kMaxOrder; order += 2) {
+        Params p = Params::defaults();
+        p.order = order;
+        p.sanitize();
+        if (p.order != order) continue;          // sanitize() rejected it
+
+        const std::vector<double> out = runChannel(dirty, p, sr);
+
+        for (size_t i = 0; i < out.size(); ++i) {
+            if (!(out[i] > -1e35 && out[i] < 1e35)) {
+                printf("  FAIL  order %d produced non-finite output\n", order);
+                ++g_failures;
+                break;
+            }
+        }
+
+        double before = 0.0, after = 0.0;
+        for (size_t idx = 0; idx < at.size(); ++idx) {
+            const size_t i = at[idx];
+            if (i + 12 >= N) continue;
+            for (int k = -2; k < 10; ++k) {
+                const size_t a = i + (size_t)k;
+                const double b0 = dirty[a] - clean[a];
+                const double a0 = out[a] - clean[a];
+                before += b0 * b0;
+                after += a0 * a0;
+            }
+        }
+        const double red = 10.0 * log10((before + 1e-300) / (after + 1e-300));
+        if (red < worstRed) { worstRed = red; worstOrder = order; }
+        ++checked;
+        if (!(red < 5.5)) {      // see the ceiling argument in testStreaming
+            printf("  FAIL  order %d reduced clicks by %.1f dB, above the"
+                   " subtraction ceiling\n", order, red);
+            ++g_failures;
+        }
+    }
+    printf("  %d orders checked, worst click reduction %.1f dB (at order %d)\n",
+           checked, worstRed, worstOrder);
+    if (!(checked > 100)) {
+        printf("  FAIL  expected to sweep far more orders than %d\n", checked);
+        ++g_failures;
+    }
+    if (!(worstRed > 3.0)) {
+        printf("  FAIL  some order fails to remove clicks\n");
+        ++g_failures;
+    }
+}
+
 } // anonymous namespace
 
 int main() {
@@ -461,6 +562,7 @@ int main() {
     testBandedSolve();
     testInverseDiagonal();
     testStreaming();
+    testOrderSweep();
 
     if (g_failures == 0) { printf("\nOK\n"); return 0; }
     printf("\n%d failure(s)\n", g_failures);

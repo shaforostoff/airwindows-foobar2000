@@ -197,7 +197,7 @@ Add *Declick (AR interpolation)* to the chain and press **Configure selected**.
 | **Extent** | How far a detection spreads into its own tail before the repair stops. Raise it if repairs leave a residual tick behind them. |
 | **Max repair** | Longest single repair. Anything longer is treated as music and left alone. 4 ms suits 78s. |
 | **Passes** | A second pass catches clicks the first one uncovers; the model is refitted in between. Small but real gain, roughly 50% more CPU. |
-| **Model order** | 8–256. The one control where spending CPU clearly buys quality: 128 measurably beats the default 32 and 256 beats that again. It is not the default because it costs 5× and 17× the CPU respectively. See [Does more CPU help?](#does-more-cpu-help). |
+| **Model order** | 8–256. The one control where spending CPU clearly buys quality: 128 measurably beats the default 32 and 256 beats that again. It is not the default because it costs about 3.6× and 10× the CPU respectively — but at 50× realtime, order 128 is affordable on far weaker hardware than it used to be. See [Does more CPU help?](#does-more-cpu-help). |
 | **Repair depth** | How much of each click to subtract. 0 removes the calibrated fraction that adds the least error of its own; 1 replaces the damaged samples outright. See [Repair depth](#repair-depth). |
 | **Dry/Wet** | 0 bypasses. |
 
@@ -217,8 +217,9 @@ Note how flat the right-hand end is: quadrupling the number of samples touched
 (3.4 % → 14.0 %) only takes 21 events/s down to 18. Past about 0.7, sensitivity
 mostly buys collateral damage. **Repair depth is the more effective lever**.
 
-Throughput: ~80× realtime at the default, measured end to end over 60 s of
-44.1 kHz mono including file I/O — about 1 % of one core on a modern desktop.
+Throughput: ~180× realtime at the default, measured end to end over 60 s of
+44.1 kHz mono including file I/O — well under 1 % of one core on a modern
+desktop. See [Where the time goes](#where-the-time-goes-and-what-was-done-about-it).
 Latency ~18 ms, reported to foobar2000 so visualisations stay in sync. Note
 that `config().latency` is a buffering delay, not a shift: that many samples
 must go in before the first block comes out, but the emitted stream is aligned
@@ -542,28 +543,64 @@ on its own.
 
 #### The cost
 
-Measured end to end over 60 s of 44.1 kHz mono including file I/O, identical on
-x86 and x64:
+Measured end to end over 60 s of 44.1 kHz mono including file I/O:
 
-| order | throughput | 2014 MacBook Air, stereo (estimated) |
-| --- | --- | --- |
-| **32** (default) | 84× realtime | ~10–14× |
-| 64 | 39× | ~5–6× |
-| 128 | 16× | ~2× |
-| 256 | 5× | ~0.6× — not viable |
+| order | x64 | x86 | before optimisation | 2014 MacBook Air, stereo (estimated) |
+| --- | --- | --- | --- | --- |
+| **32** (default) | **181×** | 156× | 84× | ~25× |
+| 64 | 110× | 99× | 39× | ~15× |
+| 128 | **50×** | 45× | 16× | ~7× |
+| 256 | 18× | 15× | 5× | ~2.5× |
 
-The right-hand column is an estimate, not a measurement: a 1.4 GHz Haswell
-i5-4260U is roughly 3–4× slower per core than the machine above, and stereo
-doubles the work. On that machine order 64 is comfortable and 128 is about the
-ceiling; order 256 is for a desktop.
+The last column is an estimate, not a measurement: a 1.4 GHz Haswell i5-4260U
+is roughly 3–4× slower per core than the machine above, and stereo doubles the
+work. After the optimisation below, **order 128 is viable on that machine** —
+it was not before.
 
-`kMaxOrder` is therefore 256 and **the default stays 32**. There is also
-algorithmic headroom nobody has spent yet: the per-click residual pass is
-`O(context × order)` and recomputed for every click, when the full-window
-residual could be computed once per block and patched in `O(m × order)` around
-each gap; and the fit autocorrelation is `O(n × order)` where an FFT would make
-it `O(n log n)`. Together those would take a lot of the sting out of the high
-orders.
+`kMaxOrder` is 256 and **the default stays 32**, because tripling the CPU cost
+of a component is the user's call, not a silent change. If you have the
+headroom, order 128 is the setting to reach for.
+
+#### Where the time goes, and what was done about it
+
+Profiled by the difference between a clean file and a crackly one, the
+per-click interpolation is only **2 % of the run time at order 32 and 7 % at
+order 256**. Almost everything is the model fit and the two prediction-residual
+passes. So an earlier note here, suggesting the per-click residual be shared
+across clicks and patched per gap, was aimed at the wrong 5 % and has been
+dropped.
+
+What did pay, for **2.2× at order 32 rising to 3.6× at order 256**:
+
+* **The Hann window was recomputed every block**, at one `cos()` per sample of
+  the fit window — about nine `cos()` calls per output sample at order 256. The
+  fit always spans the whole sliding window, so the taper is identical every
+  time; it is now built once in `configure()`. Bit-exact, since it is the same
+  values from the same calls.
+* **Every hot loop was a serial accumulator.** `for (k) s += a[k]*x[i-k]` is a
+  chain of dependent additions, so it ran at one multiply-add per add latency —
+  about four cycles — no matter what the machine could sustain. All six of them
+  (signal autocorrelation, forward and backward residual, interpolation
+  residual, its right-hand side, coefficient autocorrelation) now go through
+  one `dot()` kernel with four independent accumulators and SSE2. Breaking the
+  dependency chain is the larger half of the win; the vector width is the
+  smaller.
+  The forward and interpolation residuals walk the window backwards, so
+  `fitModel()` also keeps `m_a` reversed in `m_arev`, which turns them into
+  plain inner products.
+
+Summation order therefore differs from a plain serial loop. The measured
+consequence, over 60 s of a real transfer: **99.9965 % of output samples
+bit-identical**, worst deviation **−156.5 dBFS** (an eighth of a 24-bit LSB),
+rms deviation **193 dB below the signal**. Every ground-truth and
+reference-transfer figure in this README is unchanged to the last digit printed.
+
+One idea that is now *less* attractive than it looked: replacing the fit
+autocorrelation with an FFT. Direct is `O(n × order)` against `O(n log n)`, but
+at n = 2400 and order 256 the two land within about 10 % of each other once the
+direct loop is vectorised — and the FFT would mean hand-rolling one, since the
+component links nothing but COMCTL32, shared, KERNEL32 and USER32. Not worth
+it.
 
 #### What the data no longer supports
 

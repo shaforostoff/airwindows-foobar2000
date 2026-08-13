@@ -227,6 +227,9 @@ private:
     void detect(int from, int to, int pass);
     void interpolate(int from, int to);
     void fitModel(int from, int to);
+    //! a[0] = 1, rest zero: pass the audio through unmodelled. Keeps m_arev in
+    //! step, which is why the degenerate paths in fitModel() all come here.
+    void setUnitModel();
 
     Config m_cfg;
 
@@ -238,6 +241,15 @@ private:
 
     std::vector<double> m_fwd, m_bwd, m_det;
     std::vector<double> m_a, m_ra;
+    //! m_a reversed. The forward residual and the interpolation residual both
+    //! want sum_k a[k]*x[i-k], which walks one array backwards; holding the
+    //! coefficients the other way round turns both into plain inner products.
+    std::vector<double> m_arev;
+    //! Hann window for the model fit, precomputed. It depends only on the fit
+    //! length, which is fixed once configured, so computing it per block cost a
+    //! cos() per sample - about nine per output sample at high orders.
+    std::vector<double> m_hann;
+    int    m_hannLen = 0;
     std::vector<double> m_scratch;   //!< model fitting / median
     std::vector<double> m_seg;       //!< interpolation segment
     std::vector<double> m_err;       //!< interpolation prediction error

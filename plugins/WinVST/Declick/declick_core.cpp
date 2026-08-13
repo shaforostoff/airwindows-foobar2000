@@ -11,6 +11,13 @@
 #if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__)
 #include <xmmintrin.h>
 #define DECLICK_HAVE_MXCSR 1
+// SSE2 for the double-precision inner products. It is the floor for every
+// configuration this project builds, so there is no runtime dispatch; the
+// scalar fallback below is kept correct for anything else.
+#include <emmintrin.h>
+#define DECLICK_SSE2 1
+#else
+#define DECLICK_SSE2 0
 #endif
 
 namespace declick {
@@ -26,6 +33,56 @@ scoped_flush_denormals::~scoped_flush_denormals() {
 #endif
 
 namespace {
+
+//! Inner product of two runs of doubles.
+//!
+//! Every hot loop in this file is one of these - the signal autocorrelation,
+//! the forward and backward prediction residuals, the interpolation residual,
+//! its right hand side, and the coefficient autocorrelation - so they all go
+//! through here.
+//!
+//! The four accumulators matter more than the vector width. Written the
+//! obvious way, `for (k) s += x[k]*y[k]` is a chain of dependent additions and
+//! runs at one multiply-add per add-latency (about four cycles), whatever the
+//! machine could otherwise sustain. Splitting the sum breaks that chain.
+//!
+//! Summation order therefore differs from a plain serial loop, which is a
+//! change in the last bits. For inner products of hundreds to thousands of
+//! terms the partial-sum form is if anything slightly more accurate, and it was
+//! checked against the ground-truth corpus: identical scores to two decimals.
+inline double dot(const double * x, const double * y, int n) {
+    if (n <= 0) return 0.0;
+#if DECLICK_SSE2
+    __m128d s0 = _mm_setzero_pd(), s1 = _mm_setzero_pd();
+    __m128d s2 = _mm_setzero_pd(), s3 = _mm_setzero_pd();
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        s0 = _mm_add_pd(s0, _mm_mul_pd(_mm_loadu_pd(x + i),     _mm_loadu_pd(y + i)));
+        s1 = _mm_add_pd(s1, _mm_mul_pd(_mm_loadu_pd(x + i + 2), _mm_loadu_pd(y + i + 2)));
+        s2 = _mm_add_pd(s2, _mm_mul_pd(_mm_loadu_pd(x + i + 4), _mm_loadu_pd(y + i + 4)));
+        s3 = _mm_add_pd(s3, _mm_mul_pd(_mm_loadu_pd(x + i + 6), _mm_loadu_pd(y + i + 6)));
+    }
+    for (; i + 2 <= n; i += 2) {
+        s0 = _mm_add_pd(s0, _mm_mul_pd(_mm_loadu_pd(x + i), _mm_loadu_pd(y + i)));
+    }
+    const __m128d t = _mm_add_pd(_mm_add_pd(s0, s1), _mm_add_pd(s2, s3));
+    double acc = _mm_cvtsd_f64(_mm_add_sd(t, _mm_unpackhi_pd(t, t)));
+    if (i < n) acc += x[i] * y[i];
+    return acc;
+#else
+    double a0 = 0.0, a1 = 0.0, a2 = 0.0, a3 = 0.0;
+    int i = 0;
+    for (; i + 4 <= n; i += 4) {
+        a0 += x[i] * y[i];
+        a1 += x[i + 1] * y[i + 1];
+        a2 += x[i + 2] * y[i + 2];
+        a3 += x[i + 3] * y[i + 3];
+    }
+    double acc = (a0 + a1) + (a2 + a3);
+    for (; i < n; ++i) acc += x[i] * y[i];
+    return acc;
+#endif
+}
 
 inline double dmin(double a, double b) { return a < b ? a : b; }
 inline double dmax(double a, double b) { return a > b ? a : b; }
@@ -254,7 +311,23 @@ void Channel::configure(const Config & cfg) {
     m_det.assign(need, 0.0);
     m_a.assign(bo + 1, 0.0);
     m_ra.assign(bo + 1, 0.0);
+    m_arev.assign(bo + 1, 0.0);
     m_madRing.assign((size_t)cfg.madWindow, 0.0);
+
+    // The fit always spans the whole sliding window, so the Hann taper is the
+    // same every block. Build it once here - sized to the envelope like
+    // everything else, so a later reconfigure does not allocate.
+    m_hann.assign(need, 0.0);
+    m_hannLen = 2 * cfg.pad + (int)kBlock;
+    if (m_hannLen > 1 && (size_t)m_hannLen <= need) {
+        const double twoPi = 6.283185307179586;
+        for (int i = 0; i < m_hannLen; ++i) {
+            m_hann[(size_t)i] =
+                0.5 - 0.5 * cos(twoPi * (double)i / (double)(m_hannLen - 1));
+        }
+    } else {
+        m_hannLen = 0;                            // fitModel falls back to cos()
+    }
 
     // The Wiener path only runs when wienerAlpha > 0, and its two buffers are
     // the largest things here - at 192 kHz they are 1.06 MB of a 1.3 MB total -
@@ -327,12 +400,18 @@ void Channel::reset() {
     m_primed = true;
 }
 
+void Channel::setUnitModel() {
+    const int order = m_cfg.order;
+    m_a[0] = 1.0;
+    for (int i = 1; i <= order; ++i) m_a[(size_t)i] = 0.0;
+    for (int i = 0; i <= order; ++i) m_arev[(size_t)i] = m_a[(size_t)(order - i)];
+}
+
 void Channel::fitModel(int from, int to) {
     const int order = m_cfg.order;
     const int n = to - from;
     if (n < 4 * order + 4) {
-        m_a[0] = 1.0;
-        for (int i = 1; i <= order; ++i) m_a[i] = 0.0;
+        setUnitModel();
         return;
     }
 
@@ -351,25 +430,27 @@ void Channel::fitModel(int from, int to) {
     for (int i = 0; i < n; ++i) acc += fabs(m_win[from + i]);
     const double lim = 6.0 * (acc / (double)n) + 1e-12;
 
+    // Hann, so the autocorrelation stays positive definite. Precomputed in
+    // configure() unless the fit length is not the one it was built for.
+    const bool haveHann = (m_hannLen == n);
     const double twoPi = 6.283185307179586;
     for (int i = 0; i < n; ++i) {
         double v = m_win[from + i];
         if (v > lim) v = lim;
         else if (v < -lim) v = -lim;
-        // Hann, so the autocorrelation stays positive definite.
-        const double w = 0.5 - 0.5 * cos(twoPi * (double)i / (double)(n - 1));
+        const double w = haveHann
+            ? m_hann[(size_t)i]
+            : 0.5 - 0.5 * cos(twoPi * (double)i / (double)(n - 1));
         m_scratch[i] = v * w;
     }
 
     m_ra.assign((size_t)order + 1, 0.0);
+    const double * xw = &m_scratch[0];
     for (int d = 0; d <= order; ++d) {
-        double s = 0.0;
-        for (int i = d; i < n; ++i) s += m_scratch[i] * m_scratch[i - d];
-        m_ra[d] = s;
+        m_ra[d] = dot(xw + d, xw, n - d);
     }
     if (!(m_ra[0] > 0.0)) {
-        m_a[0] = 1.0;
-        for (int i = 1; i <= order; ++i) m_a[i] = 0.0;
+        setUnitModel();
         return;
     }
     m_ra[0] *= 1.0000001;                       // ridge, keeps Levinson stable
@@ -378,11 +459,11 @@ void Channel::fitModel(int from, int to) {
     }
     for (int i = 0; i <= order; ++i) {
         if (!finite(m_a[i])) {
-            m_a[0] = 1.0;
-            for (int j = 1; j <= order; ++j) m_a[j] = 0.0;
-            break;
+            setUnitModel();
+            return;
         }
     }
+    for (int i = 0; i <= order; ++i) m_arev[(size_t)i] = m_a[(size_t)(order - i)];
 }
 
 void Channel::detect(int from, int to, int pass) {
@@ -391,15 +472,17 @@ void Channel::detect(int from, int to, int pass) {
     // Forward and backward prediction error. A click blows up the forward
     // error at its onset and the backward error at its offset; taking the max
     // of the two captures the whole burst instead of just its leading edge.
+    // sum_k a[k]*win[i-k] walks the window backwards, so it uses the reversed
+    // coefficients and reads forward from i-order; the backward residual
+    // already walks forward and uses m_a directly.
+    const double * arev = &m_arev[0];
+    const double * a = &m_a[0];
+    const int taps = order + 1;
     for (int i = from; i < to; ++i) {
-        double s = 0.0;
-        for (int k = 0; k <= order; ++k) s += m_a[k] * m_win[i - k];
-        m_fwd[i] = s;
+        m_fwd[i] = dot(arev, &m_win[i - order], taps);
     }
     for (int i = to - 1; i >= from; --i) {
-        double s = 0.0;
-        for (int k = 0; k <= order; ++k) s += m_a[k] * m_win[i + k];
-        m_bwd[i] = s;
+        m_bwd[i] = dot(a, &m_win[i], taps);
     }
 
     if (pass == 0) {
@@ -465,29 +548,25 @@ void Channel::interpolate(int from, int to) {
         }
         m_err.assign((size_t)rows, 0.0);
         for (int r = 0; r < rows; ++r) {
-            double acc = 0.0;
-            for (int k = 0; k <= order; ++k) acc += m_a[k] * m_seg[(size_t)(r + order - k)];
-            m_err[(size_t)r] = acc;
+            m_err[(size_t)r] = dot(&m_arev[0], &m_seg[(size_t)r], order + 1);
         }
 
         // rhs[j] = -sum over the rows touching column c of a[order-(c-i)]*err[i]
         m_rhs.assign((size_t)m, 0.0);
         for (int j = 0; j < m; ++j) {
             const int c = (s - lo0) + j;
-            double acc = 0.0;
             const int r0 = (c - order > 0) ? (c - order) : 0;
             const int r1 = (c < rows - 1) ? c : (rows - 1);
-            for (int r = r0; r <= r1; ++r) acc += m_a[order - (c - r)] * m_err[(size_t)r];
-            m_rhs[(size_t)j] = -acc;
+            // a[order-(c-r)] for r = r0..r1 is a contiguous forward run.
+            m_rhs[(size_t)j] = (r1 < r0) ? 0.0
+                : -dot(&m_a[(size_t)(order - c + r0)], &m_err[(size_t)r0], r1 - r0 + 1);
         }
 
         // G is symmetric banded Toeplitz with first column ra[0..order],
         // where ra is the autocorrelation of the AR coefficients. That holds
         // exactly as long as ctx >= order, which it is.
         for (int d = 0; d <= order; ++d) {
-            double acc = 0.0;
-            for (int k = 0; k + d <= order; ++k) acc += m_a[k] * m_a[k + d];
-            m_ra[(size_t)d] = acc;
+            m_ra[(size_t)d] = dot(&m_a[0], &m_a[(size_t)d], order + 1 - d);
         }
         m_ra[0] *= 1.0 + 1e-9;
 
