@@ -197,7 +197,7 @@ Add *Declick (AR interpolation)* to the chain and press **Configure selected**.
 | **Extent** | How far a detection spreads into its own tail before the repair stops. Raise it if repairs leave a residual tick behind them. |
 | **Max repair** | Longest single repair. Anything longer is treated as music and left alone. 4 ms suits 78s. |
 | **Passes** | A second pass catches clicks the first one uncovers; the model is refitted in between. Small but real gain, roughly 50% more CPU. |
-| **Model order** | Higher follows complex material more closely at some CPU cost. 32 suits most 78s. See [Does more CPU help?](#does-more-cpu-help) — mostly it does not. |
+| **Model order** | 8–256. The one control where spending CPU clearly buys quality: 128 measurably beats the default 32 and 256 beats that again. It is not the default because it costs 5× and 17× the CPU respectively. See [Does more CPU help?](#does-more-cpu-help). |
 | **Repair depth** | How much of each click to subtract. 0 removes the calibrated fraction that adds the least error of its own; 1 replaces the damaged samples outright. See [Repair depth](#repair-depth). |
 | **Dry/Wet** | 0 bypasses. |
 
@@ -295,10 +295,59 @@ instead of by proxy.
 
 * **Detection is not the bottleneck.** 81 % of injected clicks are found, and
   those hold **98 % of the injected energy**. Clicks above −26 dBFS: 100 %.
+  Stronger than that — see [The threshold is a selector](#the-threshold-is-a-selector)
+  — *perfect* detection is actively **worse** than the real detector.
 * **Reconstruction is.** AR interpolation manages ~30 dB SNR over a 3-sample
   hole, 22 dB over 6, and only 8 dB over 16 — while the click itself sits about
   18 dB below the music. Past roughly 6 samples, replacing the samples was
   *worse than leaving the click alone*.
+
+### The threshold is a selector
+
+Replacing the detector with the true mask — perfect detection, identical repair —
+makes the result **worse**:
+
+| | repair dB | harm dB | net dB | events/s |
+| --- | --- | --- | --- | --- |
+| the real detector, default | 1.79 | −42.4 | +0.60 | 28 |
+| perfect detection, all 3600 clicks | 0.62 | −∞ | +0.62 | 37 |
+| perfect detection, top 50 % by size | 1.59 | −∞ | +1.59 | 42 |
+| **perfect detection, top 25 % by size** | **2.07** | −∞ | **+2.07** | 52 |
+| perfect detection, top 5 % by size | 1.59 | −∞ | +1.59 | 66 |
+
+Repairing *fewer* clicks is three times better than repairing all of them, and
+the reason is arithmetic. The median injected click is only **−20.8 dB**
+relative to the local signal, while reconstruction SNR is 11.9 dB — so for a
+typical click the interpolation error is about **9 dB larger than the click it
+replaces**. Only the loudest fifth are worth touching at all.
+
+So the sensitivity threshold is not merely *finding* clicks. It is **selecting
+which repairs are worth making**, and it is doing that job well: the real
+detector at its default reaches +0.60 dB while leaving only 28 events/s, where
+the selective oracle buys +1.47 dB more fidelity at the cost of nearly doubling
+the residual crackle. Both columns matter to a listener, so those are not
+directly comparable — but it does mean there is at most ~1.5 dB available to any
+better *ranking* of clicks, and none at all to merely finding more of them.
+
+This is the single most useful thing the ground truth has produced, because it
+bounds a whole family of proposals at once. Wavelet or STFT sub-band detection,
+kurtosis or skew thresholds on sub-band energy, Bayesian inference, Markov
+random fields, HMM burst models — every one of these is a way of deciding
+*which samples are damaged*, so every one of them is capped by the table above.
+Two further notes on that family:
+
+* The AR prediction residual is already a **signal-adaptive whitening
+  transform**, which is what makes small broadband impulses stand out against
+  coloured music. A wavelet high-band is a *fixed* filter bank, so it is not
+  obviously a better place to look.
+* The hysteresis in `interpolate()` is already a two-state sticky chain — high
+  threshold to enter, low threshold to stay, which is what **Extent** tunes. An
+  HMM would be the principled version of something that is present in crude
+  form, not a missing capability.
+* The premise that dense crackle turns the signal into "a sequence of missing
+  data gaps" does not hold at real densities. Genuine 78 rpm transfers measure
+  1–2 % contaminated; injecting 1800 clicks/s only reached **5.2 %**. At 95 %
+  intact this is not an inpainting problem.
 
 ### Repair depth
 
@@ -452,31 +501,84 @@ whether it is net-positive to your ears is a listening question, not a measureme
 
 ### Does more CPU help?
 
-Barely, on this axis. Reconstruction SNR (dB) for a hole of N samples:
+**Yes — model order is the one lever that clearly pays.** An earlier revision of
+this section said the opposite; it was wrong, and the correction is instructive.
+The reconstruction figures it quoted were right, but judging them per gap length
+hid what they do end to end.
 
-| model | 3 | 6 | 10 | 16 | 24 | 40 |
-| --- | --- | --- | --- | --- | --- | --- |
-| order 32, ctx ±96 (default) | 30.0 | 22.1 | 14.3 | 8.5 | 5.6 | 4.0 |
-| order 64, ctx ±192 | 29.8 | 22.4 | 16.4 | 9.8 | 6.6 | 5.4 |
-| order 128, ctx ±512 | 28.8 | 22.2 | 16.9 | 10.2 | 8.5 | 7.0 |
+Reconstruction SNR (dB) by gap length, detection held perfect and the
+interpolator identical, changing only the coefficients:
 
-Quadrupling the model order buys **nothing** at short gaps (it is fractionally
-worse), about **+3 dB** at 10–24 samples, and does not move the break-even
-point far enough to matter: end to end with perfect detection, every model
-above preferred the same 8-sample cap and scored within 0.03 dB of the others.
-Context beyond 3× the model order buys *literally zero* — the identical rows
-for ctx ±96 vs ±256 and ±192 vs ±512 are not a copy-paste error.
+| model | 1–3 | 4–6 | 7–10 | 11–15 | 16–23 | 24–40 | all |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| order 32, ctx ±96 (default) | 30.6 | 26.5 | 19.5 | 13.0 | 9.9 | 6.5 | **11.9** |
+| order 32, ctx ±528 | 30.6 | 26.5 | 19.5 | 13.0 | 9.9 | 6.5 | **11.9** |
+| order 128, ctx ±528 | 31.2 | 27.2 | 21.8 | 16.3 | 12.7 | 9.9 | **15.0** |
+| order 256, ctx ±768 | 30.3 | 27.7 | 23.5 | 19.2 | 15.7 | 14.1 | **18.3** |
 
-So there is no point spending CPU on a bigger AR model. What the data suggests
-would actually help, none of which is implemented:
+Context alone is worth **+0.00 dB** — the identical first two rows are not a
+copy-paste error. Order is worth up to **+6.4 dB**.
 
-* **Long-term (pitch) prediction.** Music is quasi-periodic; bridging a long
-  gap from the previous pitch period is the standard way to do it, and plain
-  short-term AR cannot.
-* **Subtractive repair** for longer damage — estimating the impulse and
-  subtracting it, rather than discarding the samples. The blend curve is a
-  crude approximation of this.
-* **Sinusoidal modelling** for tonal passages.
+And it survives end to end. With the *real* detector's own verdict and only the
+model changed:
+
+| | repair dB | harm dB | net dB | events/s |
+| --- | --- | --- | --- | --- |
+| order 32 (ships), w 0.45 | 1.79 | −42.4 | +0.60 | 28 |
+| order 64, w 0.45 | 2.47 | −41.2 | +0.76 | 28 |
+| order 128, w 0.45 | 2.87 | −42.1 | +1.31 | 29 |
+| **order 256, w 0.60** | **4.34** | **−42.8** | **+2.55** | **25** |
+
+Order 256 is better on **all four axes at once**, and note that its best
+subtraction fraction rises from 0.45 to 0.60 — exactly what the break-even
+argument predicts, because a better estimate makes more of each click worth
+removing.
+
+Two things that do *not* need changing: the fit window and the context. The
+window the component already has (`2*(maxRun + 3*order) + 512`) beats a fixed
+4096 at every order, by 0.25–0.38 dB — music is not stationary, so a tighter
+window tracks the local spectrum better. Raising **Model order** is sufficient
+on its own.
+
+#### The cost
+
+Measured end to end over 60 s of 44.1 kHz mono including file I/O, identical on
+x86 and x64:
+
+| order | throughput | 2014 MacBook Air, stereo (estimated) |
+| --- | --- | --- |
+| **32** (default) | 84× realtime | ~10–14× |
+| 64 | 39× | ~5–6× |
+| 128 | 16× | ~2× |
+| 256 | 5× | ~0.6× — not viable |
+
+The right-hand column is an estimate, not a measurement: a 1.4 GHz Haswell
+i5-4260U is roughly 3–4× slower per core than the machine above, and stereo
+doubles the work. On that machine order 64 is comfortable and 128 is about the
+ceiling; order 256 is for a desktop.
+
+`kMaxOrder` is therefore 256 and **the default stays 32**. There is also
+algorithmic headroom nobody has spent yet: the per-click residual pass is
+`O(context × order)` and recomputed for every click, when the full-window
+residual could be computed once per block and patched in `O(m × order)` around
+each gap; and the fit autocorrelation is `O(n × order)` where an FFT would make
+it `O(n log n)`. Together those would take a lot of the sting out of the high
+orders.
+
+#### What the data no longer supports
+
+* **Long-term (pitch) prediction** was implemented and measured: **+1.53 dB**
+  overall, +2.46 dB at 24–40 samples, and it never hurt. But a plain dense
+  order-128 model gives **+3.07 dB at half the cost**, and beats LTP in every
+  gap bucket. The reason is that an AR model of order ≥ T already represents
+  periodicity — the median pitch lag selected was 225 samples, so an order-256
+  model spans a whole period densely and does LTP's job more thoroughly. LTP is
+  the *cheap* approximation, which is why it belongs in speech codecs, where a
+  256-tap filter is unaffordable. Here it is not.
+* **Sinusoidal modelling** for tonal passages. Still unimplemented, and the
+  case for it is weaker than it looks: runs longer than 20 samples are 6.4 % of
+  runs but **46.4 %** of the damage energy, so the long tail does matter — but
+  order 256 already buys **+7.55 dB** there for far less engineering.
 
 ---
 

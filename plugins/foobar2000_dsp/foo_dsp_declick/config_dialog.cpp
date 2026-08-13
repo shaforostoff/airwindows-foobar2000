@@ -33,7 +33,7 @@ const slider_def k_sliders[] = {
     { IDC_SLIDER_EXTENT,      IDC_VALUE_EXTENT,      1000,  0.0,  1.0, 3, L""    },
     { IDC_SLIDER_MAXLEN,      IDC_VALUE_MAXLEN,       198,  0.2, 20.0, 1, L" ms" },
     { IDC_SLIDER_PASSES,      IDC_VALUE_PASSES,         2,  1.0,  3.0, 0, L""    },
-    { IDC_SLIDER_ORDER,       IDC_VALUE_ORDER,         28,  8.0, 64.0, 0, L""    },
+    { IDC_SLIDER_ORDER,       IDC_VALUE_ORDER,        124,  8.0, 256.0, 0, L""   },
     { IDC_SLIDER_DEPTH,       IDC_VALUE_DEPTH,       1000,  0.0,  1.0, 3, L""    },
     { IDC_SLIDER_DRYWET,      IDC_VALUE_DRYWET,      1000,  0.0,  1.0, 3, L""    },
 };

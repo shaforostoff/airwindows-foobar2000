@@ -33,7 +33,13 @@ namespace declick {
 
 enum {
     kMinOrder = 8,
-    kMaxOrder = 64,
+    //! 256 rather than 64 because model order turned out to be the one lever
+    //! that clearly pays: measured against injected-click ground truth, order
+    //! 128 takes whole-file error from +0.60 to +1.31 dB and order 256 to
+    //! +2.55 dB, with less collateral damage and less residual crackle at the
+    //! same time. It costs real CPU, so the default stays at 32 - see the
+    //! README for the throughput figures.
+    kMaxOrder = 256,
     kBlock    = 512      //!< analysis hop; also sets most of the latency
 };
 
