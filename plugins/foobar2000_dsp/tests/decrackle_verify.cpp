@@ -108,6 +108,7 @@ void compareAgainstReference() {
 
     const size_t frames = 24000;
     double worstAbs = 0.0;
+    double worstVec = 0.0;
     const char * worstCase = "(none)";
     int trivialCases = 0;
 
@@ -115,7 +116,8 @@ void compareAgainstReference() {
         for (int kind = 0; kind < 5; ++kind) {
             std::vector<float> a = makeSignal(frames, kind, 0x1234u + (uint32_t)c * 7u + kind);
             const std::vector<float> original = a;
-            std::vector<float> b = a;
+            std::vector<float> b = a;   // processStereo (SSE2 where available)
+            std::vector<float> s = a;   // processStereoScalar (reference path)
 
             reference::DeCrackleReference ref;
             ref.A = cases[c].params.filter;
@@ -135,19 +137,24 @@ void compareAgainstReference() {
             DeCrackleCoeffs k;
             k.compute(cases[c].params, cases[c].rate);
             std::unique_ptr<DeCracklePair> dut(new DeCracklePair());
+            std::unique_ptr<DeCracklePair> dutScalar(new DeCracklePair());
             pos = 0;
             while (pos < frames) {
                 const size_t n = (frames - pos > 1024) ? 1024 : frames - pos;
                 dut->processStereo(k, &b[pos * 2], &b[pos * 2 + 1], 2, n);
+                dutScalar->processStereoScalar(k, &s[pos * 2], &s[pos * 2 + 1], 2, n);
                 pos += n;
             }
 
-            double maxAbs = 0.0;
+            double maxAbs = 0.0, maxVec = 0.0;
             for (size_t i = 0; i < a.size(); ++i) {
                 const double d = std::fabs((double)a[i] - (double)b[i]);
                 if (d > maxAbs) maxAbs = d;
+                const double v = std::fabs((double)s[i] - (double)b[i]);
+                if (v > maxVec) maxVec = v;
             }
             if (maxAbs > worstAbs) { worstAbs = maxAbs; worstCase = cases[c].name; }
+            if (maxVec > worstVec) worstVec = maxVec;
 
             // Guard against a vacuous pass: if neither side altered the signal
             // the comparison proves nothing. (Digital silence legitimately
@@ -170,7 +177,9 @@ void compareAgainstReference() {
             check(maxAbs < 1e-9, label);
         }
     }
-    std::printf("  worst deviation overall: %.3e (%s)\n", worstAbs, worstCase);
+    std::printf("  worst deviation vs. the VST source: %.3e (%s)\n", worstAbs, worstCase);
+    std::printf("  worst deviation vector vs. scalar path: %.3e\n", worstVec);
+    check(worstVec == 0.0, "the SSE2 path is bit-identical to the scalar path");
     check(trivialCases == 0, "every comparison ran on audio the DSP actually changed");
 }
 
@@ -309,31 +318,51 @@ void benchmark() {
         { "worst case",        P(1.0f, 1.0f, 0.0f, 1.0f, 1.0f) },
     };
 
+    const double audioSecs = (double)frames / 44100.0;
+    std::printf("  %-18s %10s %10s %8s\n", "", "scalar", "SSE2", "speedup");
+
     for (size_t i = 0; i < sizeof(settings) / sizeof(settings[0]); ++i) {
         DeCrackleCoeffs k;
         k.compute(settings[i].p, 44100.0);
-        std::unique_ptr<DeCracklePair> dut(new DeCracklePair());
-        std::vector<float> work = buf;
 
-        const auto t0 = std::chrono::steady_clock::now();
-        size_t pos = 0;
-        while (pos < frames) {
-            const size_t n = (frames - pos > 1024) ? 1024 : frames - pos;
-            dut->processStereo(k, &work[pos * 2], &work[pos * 2 + 1], 2, n);
-            pos += n;
+        // Best of several passes. The minimum is the robust estimator here:
+        // interference from the rest of the machine can only ever add time.
+        const int kPasses = 5;
+        double timings[2] = { 1e30, 1e30 };
+        for (int pass = 0; pass < kPasses; ++pass) {
+            for (int variant = 0; variant < 2; ++variant) {
+                std::unique_ptr<DeCracklePair> dut(new DeCracklePair());
+                std::vector<float> work = buf;
+
+                const auto t0 = std::chrono::steady_clock::now();
+                size_t pos = 0;
+                while (pos < frames) {
+                    const size_t n = (frames - pos > 1024) ? 1024 : frames - pos;
+                    if (variant == 0) {
+                        dut->processStereoScalar(k, &work[pos * 2], &work[pos * 2 + 1], 2, n);
+                    } else {
+                        dut->processStereo(k, &work[pos * 2], &work[pos * 2 + 1], 2, n);
+                    }
+                    pos += n;
+                }
+                const auto t1 = std::chrono::steady_clock::now();
+                const double secs = std::chrono::duration<double>(t1 - t0).count();
+                if (secs < timings[variant]) timings[variant] = secs;
+            }
         }
-        const auto t1 = std::chrono::steady_clock::now();
-        const double secs = std::chrono::duration<double>(t1 - t0).count();
-        const double audioSecs = (double)frames / 44100.0;
-        std::printf("  %-18s %6.1f ms for %.0f s of audio  (%.0fx realtime, %.1f%% of one core)\n",
-                    settings[i].name, secs * 1000.0, audioSecs,
-                    audioSecs / secs, 100.0 * secs / audioSecs);
+
+        std::printf("  %-18s %8.1f ms %8.1f ms %7.2fx   (%.0fx realtime, %.2f%% of one core)\n",
+                    settings[i].name, timings[0] * 1000.0, timings[1] * 1000.0,
+                    timings[0] / timings[1],
+                    audioSecs / timings[1], 100.0 * timings[1] / audioSecs);
     }
 }
 
 } // anonymous namespace
 
 int main() {
+    std::printf("stereo path: %s\n\n",
+                DeCracklePair::haveVectorPath() ? "SSE2 (L and R packed)" : "scalar");
     std::printf("== agreement with the Airwindows VST source ==\n");
     compareAgainstReference();
     std::printf("== hostile input ==\n");

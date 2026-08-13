@@ -145,18 +145,56 @@ at 44.1 kHz, growing to roughly 9 ms with Window at maximum.
 
 ## Performance
 
-Measured by `decrackle_verify`, 44.1 kHz stereo, Release, on a modern desktop:
+`decrackle_verify` reports this, best of five passes over 30 s of 44.1 kHz
+stereo, Release, on a modern desktop:
 
-| Build | Defaults | Surface off (D = 0) |
-| --- | --- | --- |
-| x64 | ~390× realtime | ~520× realtime |
-| x86 (SSE2) | ~125× realtime | ~200× realtime |
+| Build | | scalar | SSE2 | speedup |
+| --- | --- | --- | --- | --- |
+| x64 | defaults | 57.2 ms | 46.3 ms | 1.24× |
+| x64 | Surface off | 45.9 ms | 34.5 ms | 1.33× |
+| x86 | defaults | 90.9 ms | 80.2 ms | 1.13× |
+| x86 | Surface off | 52.1 ms | 41.4 ms | 1.26× |
 
-On a 2014 MacBook Air (1.4 GHz Haswell) expect roughly a third of those
-figures — a few percent of one core, which is well under what the decoder
-itself costs. Memory is about 64 kB per stereo pair.
+That is ~650× realtime for the default x64 build — 0.15 % of one core. On a
+2014 MacBook Air (1.4 GHz Haswell) expect roughly a third of that, so still
+well under 1 %, and far below what the decoder itself costs. Memory is about
+64 kB per stereo pair.
 
-Where the port differs from a straight transcription of the VST, and why:
+### Vectorization
+
+The inner loop has three kinds of dependency, and only one of them is
+exploitable:
+
+* **Across samples** — fully recursive (six-pole IIRs, the `iirClick` attack
+  and release ramps). Nothing to vectorize.
+* **Across the six poles** — each pole feeds the next within the same sample.
+  Also serial.
+* **Across L and R** — completely independent apart from two cross-terms.
+  **This is the 2-wide SSE2 opportunity**, and it is what `runStereoSSE2`
+  exploits: L in the low lane, R in the high lane. The delay lines are already
+  stored as interleaved `{l, r}` pairs, so each read is a single 16-byte load.
+
+Because this is *lane parallelism* and not reassociation — same operations,
+same order, same associativity, no FMA contraction — packed IEEE-754 doubles
+round exactly like scalar ones. The harness asserts
+`worst deviation vector vs. scalar path: 0.000e+00`, verified under
+`/arch:SSE2`, `/arch:AVX` and `/arch:AVX2`.
+
+Two things stay scalar because they genuinely are serial: the rectified
+control band (one value derived from `L*R`, then six serial poles) and
+`sin()`, of which there are two per sample when Surface is engaged. MSVC does
+not ship a packed `sin`, and a polynomial approximation would forfeit
+bit-exactness for a couple of percent — not a trade worth making. That is why
+the Surface-off column shows the larger speedup.
+
+**AVX and AVX2 buy nothing here.** A 256-bit register holds four doubles but
+there are only two lanes of real parallelism, and the sample-to-sample
+recursion rules out processing two samples at once. Measured, AVX2 lands
+within noise of SSE2. FMA would change results (single rounding instead of
+two) and break the bit-exactness guarantee for no measurable gain. `SSE2` is
+therefore the default and there is no reason to change it.
+
+### Other differences from a straight transcription of the VST
 
 * **Coefficients are computed once per parameter change**, not once per buffer.
   The VST does ten `pow()` calls per `processReplacing` call.

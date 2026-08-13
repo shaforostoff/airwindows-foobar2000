@@ -90,10 +90,25 @@ public:
     //! ones, which maps onto the VST's processReplacing / processDoubleReplacing
     //! split: the float form dithers to 24 bits of mantissa, the double form
     //! does not (the original has that code commented out).
+    //!
+    //! On x86 and x64 this runs an SSE2 path that carries L in the low lane and
+    //! R in the high lane. That is lane parallelism, not reassociation, so the
+    //! results are bit-identical to processStereoScalar().
     void processStereo(const DeCrackleCoeffs & k, float * left, float * right,
                        size_t stride, size_t frames);
     void processStereo(const DeCrackleCoeffs & k, double * left, double * right,
                        size_t stride, size_t frames);
+
+    //! The portable reference path. processStereo() falls back to this where
+    //! SSE2 is unavailable; the test harness runs both against the Airwindows
+    //! source to prove they agree.
+    void processStereoScalar(const DeCrackleCoeffs & k, float * left, float * right,
+                             size_t stride, size_t frames);
+    void processStereoScalar(const DeCrackleCoeffs & k, double * left, double * right,
+                             size_t stride, size_t frames);
+
+    //! True if processStereo() is using the SSE2 path.
+    static bool haveVectorPath();
 
     //! Degenerate single-channel case: the algorithm's L*R cross detector
     //! collapses to x*x and both halves of the state stay in lockstep, so only
@@ -115,6 +130,10 @@ private:
     template<typename Sample, bool Mono>
     void run(const DeCrackleCoeffs & k, Sample * left, Sample * right,
              size_t stride, size_t frames);
+
+    template<typename Sample>
+    void runStereoSSE2(const DeCrackleCoeffs & k, Sample * left, Sample * right,
+                       size_t stride, size_t frames);
 
     //! aA and aB are always read at identical L/R indices, so interleaving them
     //! halves the number of cache lines the inner loop touches.
