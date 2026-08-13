@@ -157,20 +157,173 @@ Add *Declick (AR interpolation)* to the chain and press **Configure selected**.
 | **Extent** | How far a detection spreads into its own tail before the repair stops. Raise it if repairs leave a residual tick behind them. |
 | **Max repair** | Longest single repair. Anything longer is treated as music and left alone. 4 ms suits 78s. |
 | **Passes** | A second pass catches clicks the first one uncovers; the model is refitted in between. Small but real gain, roughly 50% more CPU. |
-| **Model order** | Higher follows complex material more closely at some CPU cost. 32 suits most 78s. |
+| **Model order** | Higher follows complex material more closely at some CPU cost. 32 suits most 78s. See [Does more CPU help?](#does-more-cpu-help) — mostly it does not. |
+| **Repair depth** | How much of each click to subtract. 0 removes the calibrated fraction that adds the least error of its own; 1 replaces the damaged samples outright. See [Repair depth](#repair-depth). |
 | **Dry/Wet** | 0 bypasses. |
+
+Measured over 20 s excerpts of four 78 rpm transfers, at the default repair
+depth of 0. The unprocessed originals sit at **71** impulsive events/s.
 
 | Sensitivity | samples repaired | events/s | collateral damage | HF change | precision |
 | --- | --- | --- | --- | --- | --- |
-| 0.00 | 0.7 % | 33 | −54.1 dB | −0.4 dB | 0.91 |
-| 0.30 | 1.6 % | 20 | −43.5 dB | −0.8 dB | 0.85 |
-| **0.60** (default) | ~3.5 % | ~14 | ~−39.5 dB | ~−1.4 dB | ~0.70 |
-| 0.70 | 4.8 % | 13 | −38.5 dB | −1.7 dB | 0.66 |
-| 0.85 | 7.9 % | 12 | −36.3 dB | −2.2 dB | 0.55 |
-| 1.00 | 14.5 % | 11 | −34.8 dB | −2.9 dB | 0.42 |
+| 0.00 | 0.7 % | 39 | −60.8 dB | −0.3 dB | 0.91 |
+| 0.30 | 1.5 % | 26 | −50.2 dB | −0.5 dB | 0.85 |
+| **0.60** (default) | 3.4 % | 21 | −46.5 dB | −0.8 dB | 0.72 |
+| 0.70 | 4.6 % | 20 | −45.4 dB | −1.0 dB | 0.66 |
+| 0.85 | 7.6 % | 19 | −43.2 dB | −1.3 dB | 0.55 |
+| 1.00 | 14.0 % | 18 | −41.8 dB | −1.7 dB | 0.43 |
 
-Throughput: ~107× realtime at the default (about 1 % of one core on a modern desktop).
-Latency ~18 ms, reported to foobar2000 so visualisations stay in sync.
+Note how flat the right-hand end is: quadrupling the number of samples touched
+(3.4 % → 14.0 %) only takes 21 events/s down to 18. Past about 0.7, sensitivity
+mostly buys collateral damage. **Repair depth is the more effective lever**.
+
+Throughput: ~80× realtime at the default, measured end to end over 60 s of
+44.1 kHz mono including file I/O — about 1 % of one core on a modern desktop.
+Latency ~18 ms, reported to foobar2000 so visualisations stay in sync. Note
+that `config().latency` is a buffering delay, not a shift: that many samples
+must go in before the first block comes out, but the emitted stream is aligned
+with the input.
+
+---
+
+## Ground truth
+
+A **clean master transfer of the same performance** was compared to a crackly copy.
+
+The two cannot be compared sample for sample — they are different pressings.
+(For the pair used here the local waveform correlation is 0.32, though the
+speed difference is a clean 328 ppm with only 8 samples of residual, which
+confirms it is the same 1943 recording.) So instead:
+
+1. Harvest real click waveforms from the crackly copy — 40 000 of them, median
+   6 samples long.
+2. Inject them into the clean master **at known positions**.
+
+That gives exact ground truth: the true clean signal and the exact damaged
+samples are both known, so detection and reconstruction can be scored directly
+instead of by proxy.
+
+* **Detection is not the bottleneck.** 81 % of injected clicks are found, and
+  those hold **98 % of the injected energy**. Clicks above −26 dBFS: 100 %.
+* **Reconstruction is.** AR interpolation manages ~30 dB SNR over a 3-sample
+  hole, 22 dB over 6, and only 8 dB over 16 — while the click itself sits about
+  18 dB below the music. Past roughly 6 samples, replacing the samples was
+  *worse than leaving the click alone*.
+
+### Repair depth
+
+That last point produced the one real algorithmic change to come out of this.
+A click **adds** to the music, it does not erase it, so the damaged samples
+still carry the signal underneath; replacing them outright throws that away.
+So the repair is **subtractive**: what gets removed is the discrepancy
+`d = x − v` between the sample and the model's estimate, not the sample.
+
+| gap length | full replacement | partial subtraction |
+| --- | --- | --- |
+| 1–3 samples | +7.7 dB | +8.0 dB |
+| 4–6 | +3.6 dB | +5.0 dB |
+| 7–10 | **−2.1 dB** | +1.6 dB |
+| 11–15 | **−6.4 dB** | +0.7 dB |
+| 24+ | **−10.0 dB** | ~0 dB |
+
+With perfect detection, full replacement scored **−6.9 dB** — actively harmful.
+Subtracting a fixed **0.45** of the discrepancy is what ships. The **Repair
+depth** control scales from there towards outright replacement:
+
+| depth | click reduction | collateral harm | whole-file error | events/s left |
+| --- | --- | --- | --- | --- |
+| **0.00** (default) | 1.79 dB | −42.4 dB | **+0.60 dB** | 28 |
+| 0.25 | 2.00 dB | −40.1 dB | +0.07 dB | 21 |
+| 0.50 | 1.98 dB | −38.2 dB | −0.70 dB | 17 |
+| 1.00 (full replacement) | 1.29 dB | −35.4 dB | −2.52 dB | 15 |
+
+Two things worth noting. Full replacement is worse at *removing clicks* than a
+partial subtraction is (1.29 dB against 2.00 dB) — its own interpolation error
+partly undoes the repair. And the clean master itself measures 27 impulsive
+events per second; the default lands at 28, essentially back at that natural
+level, while higher depths drive it *below* the master, which means they are
+removing real musical transients. Hence the conservative default. Raise it if
+you would rather trade some added error for less audible crackle — the numbers
+above say 0.25–0.5 is the sensible range to explore.
+
+#### What did not work: per-sample Wiener weighting
+
+The subtraction fraction started life as a curve indexed by gap length (0.75
+up to 6 samples, 0.25 out to 23, nothing beyond), fitted by hand to the
+per-length optima above. Replacing that with something derived rather than
+tabulated looked compelling: the least-squares interpolation solves `G u = −b`,
+so under the model's Gaussian innovation the posterior covariance of the repair
+is `σ²·G⁻¹`, and the solve has already produced the Cholesky factor of `G`.
+One extra banded recursion (Takahashi's, `O(n·band²)`) yields `diag(G⁻¹)` —
+the per-sample uncertainty — and the MMSE fraction to subtract is then the
+Wiener gain `1 − P/d²`. That should taper the correction towards the middle of
+a long run, where the estimate is worst, which a per-run constant cannot
+express at all.
+
+It was implemented, verified exact against a dense inverse (1.6e-15), and
+measured. **It does not pay on this material.** Against the flat fraction at
+the same cap it was worth +0.05 dB of whole-file error and made the residual
+event rate *worse* by 4–7 events/s. The reason is visible in the formula: the
+click is nearly always far larger than the estimate's own uncertainty, so
+`d² ≫ P`, the gain saturates at 1, and only the cap ever binds. Inflating `P`
+by 4× does make it gate marginal detections — collateral harm improves by up
+to 2.2 dB — but that trade is strictly worse than simply lowering sensitivity,
+which reaches the same fidelity with 13 fewer events/s left behind.
+
+What *did* pay was the thing the experiment surfaced along the way: the
+length-indexed curve was the problem, not the lack of a variance term. A flat
+fraction beats it on every axis of both datasets, mostly because the curve gave
+up entirely past 28 samples and was too timid between 7 and 23.
+
+| | click reduction | collateral harm | whole-file error | events/s |
+| --- | --- | --- | --- | --- |
+| old length-indexed curve | 1.37 dB | −41.5 dB | +0.07 dB | 31 |
+| **flat 0.45** (ships) | **1.79 dB** | **−42.4 dB** | **+0.60 dB** | **28** |
+
+The machinery is still in the tree, off by default (`Config::wienerAlpha = 0`,
+so the recursion is not even run) and sweepable from `declick_cli --alpha`.
+Material with different click statistics — louder clicks on stereo vinyl, say —
+might land somewhere else, and the code costs nothing while it is off.
+
+The defaults are conservative. On the same four transfers (originals at 71 events/s):
+
+| | events/s | collateral damage | HF change |
+| --- | --- | --- | --- |
+| default (s 0.60, depth 0) | 21 | −46.5 dB | −0.8 dB |
+| s 0.60, depth 0.50 | 16 | −42.4 dB | −1.2 dB |
+| s 0.80, depth 0.50 | 13 | −39.8 dB | −1.7 dB |
+| s 0.80, depth 1.00 | 12 | −37.0 dB | −2.0 dB |
+
+The ground-truth numbers above say that trade is net-negative in fidelity terms;
+whether it is net-positive to your ears is a listening question, not a measurement one.
+
+### Does more CPU help?
+
+Barely, on this axis. Reconstruction SNR (dB) for a hole of N samples:
+
+| model | 3 | 6 | 10 | 16 | 24 | 40 |
+| --- | --- | --- | --- | --- | --- | --- |
+| order 32, ctx ±96 (default) | 30.0 | 22.1 | 14.3 | 8.5 | 5.6 | 4.0 |
+| order 64, ctx ±192 | 29.8 | 22.4 | 16.4 | 9.8 | 6.6 | 5.4 |
+| order 128, ctx ±512 | 28.8 | 22.2 | 16.9 | 10.2 | 8.5 | 7.0 |
+
+Quadrupling the model order buys **nothing** at short gaps (it is fractionally
+worse), about **+3 dB** at 10–24 samples, and does not move the break-even
+point far enough to matter: end to end with perfect detection, every model
+above preferred the same 8-sample cap and scored within 0.03 dB of the others.
+Context beyond 3× the model order buys *literally zero* — the identical rows
+for ctx ±96 vs ±256 and ±192 vs ±512 are not a copy-paste error.
+
+So there is no point spending CPU on a bigger AR model. What the data suggests
+would actually help, none of which is implemented:
+
+* **Long-term (pitch) prediction.** Music is quasi-periodic; bridging a long
+  gap from the previous pitch period is the standard way to do it, and plain
+  short-term AR cannot.
+* **Subtractive repair** for longer damage — estimating the impulse and
+  subtracting it, rather than discarding the samples. The blend curve is a
+  crude approximation of this.
+* **Sinusoidal modelling** for tonal passages.
 
 ---
 
@@ -294,6 +447,35 @@ SSE2 and the scalar path. It also:
 * checks the single-channel path against a duplicated-stereo run;
 * reports throughput.
 
+**`declick_verify`** checks the declicker's linear algebra against dense brute
+force — this is the part where a subtle error yields plausible but wrong audio
+rather than an obvious failure. `levinson()` against a Gaussian-elimination
+solve of the Yule–Walker system (worst deviation **5.6e-16**),
+`solveBandedToeplitz()` against dense elimination (**3.8e-15**), and
+`bandedInverseDiagonal()` against a full dense inverse (**1.6e-15**), over
+random positive-definite systems across the whole order and run-length range.
+The single-missing-sample posterior variance is pinned separately against its
+closed form `1/Σaₖ²`, which anchors the scale of the rest. It also covers
+streaming properties end to end: silence in, silence out; clean audio passes
+through untouched; injected clicks come out 26 dB smaller; NaN, ±infinity and
+denormals produce nothing non-finite and the stream recovers afterwards;
+dry/wet 0 is a bit-exact bypass; and the latency contract holds in both
+directions (no output before `latency` samples are fed, output immediately
+after).
+
+**`preset_roundtrip`** saves each component's parameters to a `dsp_preset` and
+reads them back, checking every field individually with values chosen so that a
+field read out of position cannot pass by accident. It also covers the
+version-1 declick layout (written before **Repair depth** existed, still
+loadable, depth falls back to its default), a preset owned by a different GUID,
+and a truncated payload. This test exists because `depth` was once written by
+`make()` and skipped by `parse()`, which silently shifted every field after it
+— saved chains came back with **Dry/Wet at 0**, i.e. bypassed. A dialog that
+looks right and a DSP that runs will not catch that; only a save/load cycle
+will. Like the smoke test it needs `shared.dll` and skips itself when no
+matching-architecture foobar2000 is installed; the logic under test is
+architecture-independent, so one architecture is enough.
+
 **`component_smoke`** loads the built DLL exactly as foobar2000 does — through
 `foobar2000_get_interface()` and the service factory list — then registers the
 DSP, instantiates it from a preset and pushes audio through it: format changes
@@ -371,6 +553,8 @@ tools/
 tests/
   decrackle_reference.h           verbatim Airwindows VST source, used as an oracle
   decrackle_verify.cpp            correctness, robustness, throughput
+  declick_verify.cpp              AR linear algebra vs. dense brute force
+  preset_roundtrip.cpp            parameters survive save/load, both components
   component_smoke.cpp             loads a DLL through the real SDK plumbing
 external/                         the downloaded SDK (git-ignored)
 dist/                             release artefacts (git-ignored)

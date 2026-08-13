@@ -1,4 +1,4 @@
-/* foo_dsp_declick - resource identifiers */
+﻿/* foo_dsp_declick - resource identifiers */
 
 #ifndef FOO_DSP_DECLICK_RESOURCE_H
 #define FOO_DSP_DECLICK_RESOURCE_H
@@ -14,14 +14,16 @@
 #define IDC_SLIDER_MAXLEN           2003
 #define IDC_SLIDER_PASSES           2004
 #define IDC_SLIDER_ORDER            2005
-#define IDC_SLIDER_DRYWET           2006
+#define IDC_SLIDER_DEPTH            2006
+#define IDC_SLIDER_DRYWET           2007
 
 #define IDC_VALUE_SENSITIVITY       2011
 #define IDC_VALUE_EXTENT            2012
 #define IDC_VALUE_MAXLEN            2013
 #define IDC_VALUE_PASSES            2014
 #define IDC_VALUE_ORDER             2015
-#define IDC_VALUE_DRYWET            2016
+#define IDC_VALUE_DEPTH             2016
+#define IDC_VALUE_DRYWET            2017
 
 #define IDC_HINT                    2020
 #define IDC_DEFAULTS                2021

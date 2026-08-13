@@ -1,4 +1,4 @@
-/* ========================================
+﻿/* ========================================
  *  foo_dsp_declick - preset (de)serialisation
  * ======================================== */
 
@@ -22,7 +22,7 @@ void make(const Params & params, dsp_preset & out) {
 
     dsp_preset_builder builder;
     builder << (t_uint32)version;
-    builder << p.sensitivity << p.extent << p.maxLengthMs << p.dryWet;
+    builder << p.sensitivity << p.extent << p.maxLengthMs << p.depth << p.dryWet;
     builder << (t_uint32)p.passes << (t_uint32)p.order;
     builder.finish(guid(), out);
 }
@@ -34,11 +34,12 @@ Params parse(const dsp_preset & in) {
             dsp_preset_parser parser(in);
             t_uint32 ver = 0;
             parser >> ver;
-            if (ver == (t_uint32)version) {
+            if (ver == 1u || ver == 2u) {
                 Params tmp = Params::defaults();
                 t_uint32 passes = 0, order = 0;
-                parser >> tmp.sensitivity >> tmp.extent >> tmp.maxLengthMs
-                       >> tmp.dryWet >> passes >> order;
+                parser >> tmp.sensitivity >> tmp.extent >> tmp.maxLengthMs;
+                if (ver >= 2u) parser >> tmp.depth;   // absent in version 1
+                parser >> tmp.dryWet >> passes >> order;
                 tmp.passes = (int)passes;
                 tmp.order = (int)order;
                 p = tmp;

@@ -1,4 +1,4 @@
-/* ========================================
+﻿/* ========================================
  *  declick_cli - run the declick core over a WAV file offline.
  *
  *    declick_cli <in.wav> <out.wav> [options]
@@ -26,11 +26,12 @@ void usage() {
         "\n"
         "  declick_cli <in.wav> <out.wav> [options]\n"
         "\n"
-        "  -s <0..1>    Sensitivity (default 0.43, higher catches more)\n"
+        "  -s <0..1>    Sensitivity (default 0.6, higher catches more)\n"
         "  -e <0..1>    Extent, how far a detection spreads (default 0.5)\n"
         "  -l <ms>      Longest single repair, ms (default 4)\n"
         "  -p <1..3>    Passes (default 2)\n"
         "  -o <8..64>   AR model order (default 32)\n"
+        "  -d <0..1>    Repair depth: 0 = least added error, 1 = full replacement\n"
         "  -w <0..1>    Dry/wet (default 1)\n"
         "  --delta      Write what was removed instead of the repaired audio\n"
         "  --quiet\n");
@@ -52,7 +53,6 @@ int main(int argc, char ** argv) {
     const std::string inPath = argv[1];
     const std::string outPath = argv[2];
     declick::Params params = declick::Params::defaults();
-    params.sensitivity = 0.43f;      // hi = 4.5 sigma, the tuned default
     bool delta = false, quiet = false;
 
     for (int i = 3; i < argc; ++i) {
@@ -72,6 +72,7 @@ int main(int argc, char ** argv) {
         else if (a == "-l") params.maxLengthMs = v;
         else if (a == "-p") params.passes = (int)v;
         else if (a == "-o") params.order = (int)v;
+        else if (a == "-d") params.depth = v;
         else if (a == "-w") params.dryWet = v;
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }
     }

@@ -14,7 +14,9 @@ namespace declick_preset {
 //! Identity of this DSP in the stored chain configuration. Never change it.
 GUID guid();
 
-enum { version = 1 };
+//! 1 = pre-depth layout (still read, depth falls back to its default).
+//! 2 = current layout, with `depth` between maxLengthMs and dryWet.
+enum { version = 2 };
 
 void make(const declick::Params & params, dsp_preset & out);
 

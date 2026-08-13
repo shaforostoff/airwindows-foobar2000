@@ -42,6 +42,7 @@ struct Params {
     float sensitivity;  //!< 0 = only the most obvious clicks, 1 = aggressive
     float extent;       //!< how far a detection spreads outwards into its tail
     float maxLengthMs;  //!< longest single repair, in milliseconds
+    float depth;        //!< 0 = least added error, 1 = replace damaged samples outright
     int   passes;       //!< 1..3; a second pass catches clicks the first uncovers
     int   order;        //!< AR model order
     float dryWet;       //!< 0 = bypass, 1 = full repair
@@ -54,6 +55,11 @@ struct Params {
         p.sensitivity = 0.6f;
         p.extent      = 0.5f;
         p.maxLengthMs = 4.0f;
+        // 0 follows the curve calibrated against a clean master transfer with
+        // real clicks injected at known positions - the setting that adds the
+        // least error of its own. Raising it removes more of each click but
+        // substitutes more guesswork; see the README.
+        p.depth       = 0.0f;
         p.passes      = 2;
         p.order       = 32;
         p.dryWet      = 1.0f;
@@ -72,6 +78,7 @@ struct Config {
     int    madWindow    = 6615;  //!< samples used for the robust noise estimate
     double thresholdHi  = 3.5;   //!< trigger
     double thresholdLo  = 1.6;   //!< hysteresis extension
+    double depth        = 0.0;   //!< pushes the blend curve towards replacement
     double wet          = 1.0;
     int    pad          = 272;   //!< context needed either side of a block
     int    latency      = 784;

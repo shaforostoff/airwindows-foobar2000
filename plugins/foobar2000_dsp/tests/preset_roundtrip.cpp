@@ -1,0 +1,164 @@
+/* ========================================
+ *  preset_roundtrip - every parameter survives a save/load cycle.
+ *
+ *  This exists because `depth` once got written by make() and skipped by
+ *  parse(), which silently shifted every field after it. A blind spot like
+ *  that does not show up in a smoke test: the dialog looks right, the DSP
+ *  runs, and only a saved-and-reloaded chain comes back wrong.
+ *
+ *  Uses only dsp_preset_builder/parser, so it needs the SDK but not an
+ *  installed foobar2000.
+ * ======================================== */
+
+#include "stdafx_host.h"
+
+#include "../foo_dsp_declick/declick_preset.h"
+#include "../foo_dsp_decrackle/decrackle_preset.h"
+
+#include <stdio.h>
+
+#include <string>
+
+namespace {
+
+int g_failures = 0;
+
+void check(bool ok, const char * what) {
+    if (!ok) { printf("  FAIL  %s\n", what); ++g_failures; }
+}
+
+void checkNear(double got, double want, const char * what) {
+    // Params are floats; the preset stores them as floats. Exact is expected.
+    if (got != want) {
+        printf("  FAIL  %s: got %.9g, want %.9g\n", what, got, want);
+        ++g_failures;
+    }
+}
+
+void compare(const declick::Params & got, const declick::Params & want,
+             const char * label) {
+    printf("%s\n", label);
+    checkNear(got.sensitivity, want.sensitivity, "sensitivity");
+    checkNear(got.extent,      want.extent,      "extent");
+    checkNear(got.maxLengthMs, want.maxLengthMs, "maxLengthMs");
+    checkNear(got.depth,       want.depth,       "depth");
+    checkNear(got.dryWet,      want.dryWet,      "dryWet");
+    check(got.passes == want.passes, "passes");
+    check(got.order  == want.order,  "order");
+}
+
+declick::Params roundTrip(const declick::Params & in) {
+    dsp_preset_impl preset;
+    declick_preset::make(in, preset);
+    return declick_preset::parse(preset);
+}
+
+//! A version-1 preset, as written by the build that shipped before `depth`
+//! existed: same field order, minus depth.
+void makeLegacyV1(const declick::Params & p, dsp_preset & out) {
+    dsp_preset_builder builder;
+    builder << (t_uint32)1;
+    builder << p.sensitivity << p.extent << p.maxLengthMs << p.dryWet;
+    builder << (t_uint32)p.passes << (t_uint32)p.order;
+    builder.finish(declick_preset::guid(), out);
+}
+
+} // anonymous namespace
+
+int main() {
+    // 1. Defaults survive.
+    {
+        declick::Params d = declick::Params::defaults();
+        compare(roundTrip(d), d, "defaults round-trip");
+    }
+
+    // 2. Every field distinct, so a shifted read cannot accidentally pass.
+    {
+        declick::Params p;
+        p.sensitivity = 0.8125f;   // exact in binary, no rounding to argue about
+        p.extent      = 0.375f;
+        p.maxLengthMs = 6.5f;
+        p.depth       = 0.25f;
+        p.dryWet      = 0.75f;
+        p.passes      = 3;
+        p.order       = 48;
+        compare(roundTrip(p), p, "non-default values round-trip");
+    }
+
+    // 3. Extremes, after sanitize() has had its say.
+    {
+        declick::Params p;
+        p.sensitivity = 1.0f; p.extent = 0.0f; p.maxLengthMs = 20.0f;
+        p.depth = 1.0f; p.dryWet = 0.0f; p.passes = 1; p.order = 8;
+        p.sanitize();
+        compare(roundTrip(p), p, "extremes round-trip");
+    }
+
+    // 4. A version-1 preset still loads, with depth at its default.
+    {
+        declick::Params p = declick::Params::defaults();
+        p.sensitivity = 0.8125f;
+        p.extent      = 0.375f;
+        p.maxLengthMs = 6.5f;
+        p.dryWet      = 0.75f;
+        p.passes      = 3;
+        p.order       = 48;
+        p.depth       = 123.0f;   // never written; must not come back
+
+        dsp_preset_impl preset;
+        makeLegacyV1(p, preset);
+        const declick::Params got = declick_preset::parse(preset);
+
+        declick::Params want = p;
+        want.depth = declick::Params::defaults().depth;
+        compare(got, want, "version-1 preset upgrades");
+    }
+
+    // 5. A preset belonging to somebody else is ignored, not misread.
+    {
+        dsp_preset_impl preset;
+        dsp_preset_builder builder;
+        builder << (t_uint32)0xDEADBEEF << 1.0f << 2.0f;
+        GUID other = declick_preset::guid();
+        other.Data1 ^= 1;
+        builder.finish(other, preset);
+
+        compare(declick_preset::parse(preset), declick::Params::defaults(),
+                "foreign preset falls back to defaults");
+    }
+
+    // 6. Truncated payload: must fall back, must not throw out of parse().
+    {
+        dsp_preset_impl preset;
+        dsp_preset_builder builder;
+        builder << (t_uint32)declick_preset::version << 0.5f;   // and nothing else
+        builder.finish(declick_preset::guid(), preset);
+
+        compare(declick_preset::parse(preset), declick::Params::defaults(),
+                "truncated preset falls back to defaults");
+    }
+
+    // 7. Same guarantee for the other component in the pack.
+    {
+        using airwindows::DeCrackleParams;
+        DeCrackleParams p;
+        p.filter = 0.8125f; p.window = 0.375f; p.threshold = 0.625f;
+        p.surface = 0.125f; p.dryWet = 0.75f;
+        p.sanitize();
+
+        dsp_preset_impl preset;
+        decrackle_preset::make(p, preset);
+        const DeCrackleParams got = decrackle_preset::parse(preset);
+
+        printf("decrackle round-trip\n");
+        checkNear(got.filter,    p.filter,    "filter");
+        checkNear(got.window,    p.window,    "window");
+        checkNear(got.threshold, p.threshold, "threshold");
+        checkNear(got.surface,   p.surface,   "surface");
+        checkNear(got.dryWet,    p.dryWet,    "dryWet");
+    }
+
+    if (g_failures == 0) { printf("\nOK\n"); return 0; }
+    printf("\n%d failure(s)\n", g_failures);
+    return 1;
+}

@@ -3,6 +3,8 @@
 #
 #   decrackle_verify  - DSP core vs. a literal transcription of the Airwindows
 #                       VST source, plus robustness and throughput. No SDK.
+#   preset_roundtrip  - every parameter survives save/load. Links the SDK, so
+#                       it needs foobar2000's shared.dll; skips if absent.
 #   component_smoke   - loads the built DLL through foobar2000's own service
 #                       plumbing. Needs foobar2000 installed; skips if absent.
 # ---------------------------------------------------------------------------
@@ -28,13 +30,49 @@ endif()
 add_test(NAME decrackle_verify COMMAND decrackle_verify)
 
 # ---------------------------------------------------------------------------
+# Preset serialisation. Always built - a compile break here is worth catching
+# on every architecture - but only registered as a test where shared.dll can
+# be placed beside it (see the smoke-test block below). The logic under test
+# is architecture-independent, so running it on one architecture is enough.
 
 include("${CMAKE_SOURCE_DIR}/cmake/fb2k_find_runtime.cmake")
 fb2k_find_runtime("${FOO_DSP_TARGET_ARCH}" FB2K_RUNTIME_DIR)
 
+add_executable(preset_roundtrip
+    preset_roundtrip.cpp
+    stdafx_host.h
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_declick/declick_preset.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_declick/declick_core.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_decrackle/decrackle_preset.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_decrackle/decrackle_core.cpp"
+)
+
+target_include_directories(preset_roundtrip PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_declick"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_decrackle")
+
+target_link_libraries(preset_roundtrip PRIVATE fb2k::sdk)
+
+if(MSVC)
+    target_compile_options(preset_roundtrip PRIVATE /W3)
+endif()
+
+if(FB2K_RUNTIME_DIR)
+    add_custom_command(TARGET preset_roundtrip POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${FB2K_RUNTIME_DIR}/shared.dll" "$<TARGET_FILE_DIR:preset_roundtrip>/"
+        VERBATIM)
+    add_test(NAME preset_roundtrip COMMAND preset_roundtrip)
+endif()
+
+set_target_properties(preset_roundtrip PROPERTIES FOLDER "tests")
+
+# ---------------------------------------------------------------------------
+
 if(NOT FB2K_RUNTIME_DIR)
     message(STATUS "No ${FOO_DSP_TARGET_ARCH} foobar2000 install found "
-                   "- skipping the component smoke test "
+                   "- skipping the smoke and preset tests "
                    "(set FOOBAR2000_DIR to point at one)")
 else()
     message(STATUS "Component smoke test will use ${FB2K_RUNTIME_DIR}")
