@@ -375,6 +375,69 @@ so the recursion is not even run) and sweepable from `declick_cli --alpha`.
 Material with different click statistics — louder clicks on stereo vinyl, say —
 might land somewhere else, and the code costs nothing while it is off.
 
+#### What did not work: robust (M-estimation) AR fitting
+
+The standard advice for AR declicking is to fit the model iteratively,
+downweighting the equations where the prediction error is largest, so the fit
+can "see through" the crackle instead of being dragged towards it. The fit here
+does something much cruder — a single amplitude clip at 6× mean `|x|` — so this
+looked like an obvious gap. It is not, and the reason is worth recording.
+
+The ceiling was measured before implementing anything: hold detection perfect,
+keep the interpolation identical, and change **only** where the coefficients
+come from. Fitting on the *true clean master* is what no robust estimator can
+beat.
+
+| gap | shipped | no clip at all | IRLS Huber | IRLS reject | **oracle (clean)** |
+| --- | --- | --- | --- | --- | --- |
+| 1–3 | 30.6 | 30.6 | 30.6 | 30.5 | 31.3 |
+| 4–6 | 26.5 | 26.5 | 26.2 | 26.1 | 26.7 |
+| 7–10 | 19.5 | 19.5 | 19.2 | 19.1 | 19.9 |
+| 16–23 | 9.9 | 9.9 | 9.8 | 9.7 | 10.2 |
+| **all** | **11.9** | 11.9 | 11.7 | 11.7 | **12.2** |
+
+A perfect model is worth **+0.28 dB**. Every IRLS variant tried — Huber and
+Tukey weights, hard rejection, 3 iterations, cut-offs from 1σ to 4σ — came out
+*behind* the shipped fit, by 0.16 to 0.33 dB.
+
+Since the objection to that is "your ground truth is not crackly enough", the
+density was raised until it was, using 31 920 real click waveforms harvested
+from a heavily crackled 1938 D'Arienzo transfer:
+
+| clicks/s | contamination | shipped | IRLS Huber | oracle | headroom |
+| --- | --- | --- | --- | --- | --- |
+| 60 | 0.7 % | 16.87 | 16.51 | 16.76 | −0.11 dB |
+| 180 | 2.1 % | 19.36 | 18.52 | 19.60 | +0.24 dB |
+| 600 | 4.7 % | 18.82 | 18.66 | 18.65 | −0.17 dB |
+| 1800 | 5.2 % | 17.78 | 17.60 | 18.08 | +0.30 dB |
+
+The headroom never clears +0.30 dB, at times it is negative (noise around
+zero), and IRLS is behind at **every** density. Three reasons, all measurable:
+
+* **The clicks are tiny, not large.** Median peak −39 dBFS on the crackly
+  transfer; the injected set has median amplitude −50.8 dBFS. The shipped clip
+  threshold sits at −8.5 dBFS, so **0.0 %** of damaged samples ever reach it —
+  the existing "protection" is inert, which is also why *no clip at all*
+  scores identically.
+* **Contamination is too sparse to bias a sum over a thousand lag products.**
+  Even at 5 % it barely moves the autocorrelation.
+* **IRLS actively hurts because music is unpredictable too.** A high residual
+  means "surprising", and piano attacks and bandoneón accents are surprising.
+  Downweighting them biases the model towards the smooth part of the spectrum —
+  precisely the wrong direction for reconstructing transients.
+
+The published advice is sound; it is aimed at a different regime. Vinyl ticks
+and scratches are *loud* outliers, tens of dB above the noise floor and
+sometimes clipping, and there M-estimation earns its keep. Shellac crackle is
+the opposite: dense but minuscule. It corrupts the samples it hits badly and
+the model estimate hardly at all.
+
+The practical conclusion is that **the AR coefficients are not the bottleneck**
+and never were. Reconstruction is limited by how much information the
+surrounding samples carry about a hole, not by the accuracy of the model
+describing them. That is also why more model order and more context bought so
+little.
+
 The defaults are conservative. On the same four transfers (originals at 71 events/s):
 
 | | events/s | collateral damage | HF change |

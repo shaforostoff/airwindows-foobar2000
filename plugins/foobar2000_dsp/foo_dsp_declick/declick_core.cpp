@@ -336,8 +336,16 @@ void Channel::fitModel(int from, int to) {
         return;
     }
 
-    // Soft-limit the spikes before fitting: clicks are a few percent of the
-    // block and would otherwise pull the model towards themselves.
+    // Guard against gross outliers only - a dropout, a splice, a digital
+    // full-scale spike. It does NOT protect the fit from crackle, despite
+    // looking like it should: on 78 rpm material the threshold lands near
+    // -8 dBFS while the clicks themselves sit at -40 to -50 dBFS, so not one
+    // of them is touched. That turns out not to matter. Fitting on the true
+    // clean signal instead - the best any robust estimator could ever do - is
+    // worth at most +0.3 dB of reconstruction SNR, measured against
+    // injected-click ground truth at contamination from 0.7% to 5.2%.
+    // Crackle is dense but tiny, and a sum over a thousand lag products
+    // barely notices it. See the README.
     m_scratch.resize((size_t)n);
     double acc = 0.0;
     for (int i = 0; i < n; ++i) acc += fabs(m_win[from + i]);
