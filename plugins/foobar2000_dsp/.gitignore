@@ -1,0 +1,9 @@
+# Fetched at configure time by cmake/fb2k_download_sdk.cmake
+/external/
+
+# Build trees and release artefacts
+/build/
+/dist/
+/out/
+/.vs/
+CMakeUserPresets.json
