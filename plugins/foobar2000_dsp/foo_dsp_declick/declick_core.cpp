@@ -25,30 +25,6 @@ const double kAbsurd = 1.0e30;
 
 inline bool finite(double v) { return v > -kAbsurd && v < kAbsurd; }
 
-//! How much of the AR estimate to substitute for a run of `m` damaged samples.
-//!
-//! A click ADDS to the music, it does not erase it, so the damaged samples
-//! still carry the signal underneath. Replacing them outright throws that away
-//! and substitutes a guess, which only wins while the guess is good.
-//! Reconstruction SNR falls off fast with the size of the hole - measured on a
-//! clean master transfer with real clicks injected at known positions, plain
-//! AR interpolation of 78 rpm material manages about 30 dB over 3 samples,
-//! 22 dB over 6 and only 8 dB over 16, and the click itself sits roughly 18 dB
-//! below the music. Past about 6 samples full replacement is therefore worse
-//! than leaving the damage alone.
-//!
-//! Blending recovers most of that. Against the same ground truth, with perfect
-//! detection, full replacement scored -6.9 dB (i.e. actively harmful) while
-//! this curve scores +1.0 dB. The knots come straight from the per-length
-//! optimum: 0.75 up to 6 samples, 0.25 out to about 23, nothing beyond.
-inline double repairBlend(int m) {
-    if (m <= 6) return 0.75;
-    if (m < 9)  return 0.75 - 0.5 * ((double)(m - 6) / 3.0);
-    if (m <= 20) return 0.25;
-    if (m < 28) return 0.25 * (1.0 - (double)(m - 20) / 8.0);
-    return 0.0;
-}
-
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -183,6 +159,44 @@ bool solveBandedToeplitz(const double * d, int band, double * b, int n,
     return true;
 }
 
+bool bandedInverseDiagonal(const std::vector<double> & chol, int band, int n,
+                           std::vector<double> & work, double * diag) {
+    if (n <= 0 || diag == NULL) return false;
+    if (band >= n) band = n - 1;                  // same clipping as the solve
+    const int W = band + 1;
+    if (chol.size() < (size_t)n * (size_t)W) return false;
+    const double * L = &chol[0];
+
+    // S holds the banded slice of the inverse: S(i,j), 0 <= j-i <= band, at
+    // work[i*W + (j-i)]. Rows are filled bottom to top and, within a row,
+    // right to left - the j == i entry is last because it is the one that
+    // needs the rest of its own row.
+    work.assign((size_t)n * (size_t)W, 0.0);
+    double * S = &work[0];
+
+    for (int i = n - 1; i >= 0; --i) {
+        const double lii = L[(size_t)i * W];
+        if (!(lii > 0.0) || !finite(lii)) return false;
+        const int khi = (i + band < n - 1) ? (i + band) : (n - 1);
+
+        for (int j = khi; j >= i; --j) {
+            double s = (i == j) ? 1.0 / (lii * lii) : 0.0;
+            for (int k = i + 1; k <= khi; ++k) {
+                const double lki = L[(size_t)k * W + (k - i)] / lii;
+                const double skj = (j >= k) ? S[(size_t)k * W + (j - k)]
+                                            : S[(size_t)j * W + (k - j)];
+                s -= lki * skj;
+            }
+            S[(size_t)i * W + (j - i)] = s;
+        }
+
+        const double v = S[(size_t)i * W];
+        if (!(v > 0.0) || !finite(v)) return false;   // G is PD; this must hold
+        diag[i] = v;
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 
 Channel::Channel() {
@@ -203,6 +217,9 @@ void Channel::configure(const Config & cfg) {
     m_det.assign(need, 0.0);
     m_a.assign((size_t)cfg.order + 1, 0.0);
     m_ra.assign((size_t)cfg.order + 1, 0.0);
+    // Sized for the longest run the detector will ever hand to interpolate().
+    m_pvar.assign((size_t)cfg.maxRun + 1, 0.0);
+    m_sinv.assign((size_t)(cfg.maxRun + 1) * (size_t)(cfg.order + 1), 0.0);
     m_madRing.assign((size_t)cfg.madWindow, 0.0);
     reset();
 }
@@ -339,11 +356,6 @@ void Channel::interpolate(int from, int to) {
         i = e + 1;
         if (m <= 0 || m > m_cfg.maxRun) continue;      // too long: that is music
 
-        // depth pushes the calibrated curve towards outright replacement.
-        const double base = repairBlend(m);
-        const double blend = base + m_cfg.depth * (1.0 - base);
-        if (blend <= 0.0) continue;   // beyond what interpolation can reconstruct
-
         const int lo0 = s - ctx;
         const int hi0 = e + ctx;
         if (lo0 < 0 || hi0 >= m_fill) continue;
@@ -388,6 +400,15 @@ void Channel::interpolate(int from, int to) {
 
         if (!solveBandedToeplitz(&m_ra[0], order, &m_rhs[0], m, m_solve)) continue;
 
+        // Optional per-sample confidence. Under the model's Gaussian
+        // innovation the posterior covariance of the interpolated run is
+        // sigma^2 * G^-1, and the solve already produced the factor of G, so
+        // the diagonal costs one more banded recursion. Off by default; see
+        // Config::wienerAlpha for why.
+        const bool haveVar =
+            m_cfg.wienerAlpha > 0.0 &&
+            bandedInverseDiagonal(m_solve, order, m, m_sinv, &m_pvar[0]);
+
         // Never let a repair leave the local dynamic range.
         double localMax = 0.0;
         for (int t = lo0; t <= hi0; ++t) {
@@ -403,14 +424,50 @@ void Channel::interpolate(int from, int to) {
         }
         if (!ok) continue;
 
+        // Subtractive repair. A click ADDS to the music, so the damaged
+        // samples still carry the signal underneath: what to remove is the
+        // discrepancy d = x - v, not the sample. Subtracting all of d means
+        // trusting the estimate completely, and over a hole of any size the
+        // estimate is not that good - 78 rpm material interpolates at about
+        // 30 dB SNR over 3 samples, 22 dB over 6 and 8 dB over 16, while the
+        // click itself sits only ~18 dB below the music. Removing a fixed
+        // fraction keeps most of the click while leaving the underlying signal
+        // where the estimate would have done more harm than good.
+        const double sigma2 = m_scale * m_scale;
+        const double depth = m_cfg.depth;
+        const double alpha = m_cfg.wienerAlpha;
+        const double wcap = m_cfg.wienerMax;
+        int touched = 0;
+
         for (int j = 0; j < m; ++j) {
             double v = m_rhs[(size_t)j];
             if (v > limit) v = limit;
             else if (v < -limit) v = -limit;
-            m_win[s + j] = blend * v + (1.0 - blend) * m_win[s + j];
+
+            const double x = m_win[s + j];
+            const double dj = x - v;
+
+            // The Wiener gain reduces to 1 wherever the discrepancy dwarfs the
+            // estimate's own uncertainty, which on this material is almost
+            // everywhere - hence the flat default.
+            double w = 1.0;
+            if (haveVar) {
+                const double P = alpha * sigma2 * m_pvar[(size_t)j];
+                const double d2 = dj * dj;
+                w = (d2 > P) ? (1.0 - P / d2) : 0.0;
+            }
+            if (w > wcap) w = wcap;
+            w += depth * (1.0 - w);   // at depth 1 this is outright replacement
+
+            if (w > 0.0) {
+                m_win[s + j] = x - w * dj;
+                ++touched;
+            }
+            // Flagged either way: the run has been dealt with, and a later
+            // pass must not come back and attack it again.
             m_flag[s + j] = 1;
         }
-        m_repaired += (uint64_t)m;
+        m_repaired += (uint64_t)touched;
     }
 }
 

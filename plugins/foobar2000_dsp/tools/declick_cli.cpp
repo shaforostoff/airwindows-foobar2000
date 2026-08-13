@@ -34,7 +34,11 @@ void usage() {
         "  -d <0..1>    Repair depth: 0 = least added error, 1 = full replacement\n"
         "  -w <0..1>    Dry/wet (default 1)\n"
         "  --delta      Write what was removed instead of the repaired audio\n"
-        "  --quiet\n");
+        "  --quiet\n"
+        "\n"
+        "  Calibration only, not exposed in the component:\n"
+        "  --alpha <x>  Over-subtraction on the estimate variance\n"
+        "  --wmax <x>   Ceiling on the subtracted fraction\n");
 }
 
 bool parseFloat(const char * s, float & out) {
@@ -54,6 +58,7 @@ int main(int argc, char ** argv) {
     const std::string outPath = argv[2];
     declick::Params params = declick::Params::defaults();
     bool delta = false, quiet = false;
+    float alpha = -1.0f, wmax = -1.0f;   // negative: leave the calibrated value
 
     for (int i = 3; i < argc; ++i) {
         const std::string a = argv[i];
@@ -67,7 +72,9 @@ int main(int argc, char ** argv) {
             return 2;
         }
         ++i;
-        if      (a == "-s") params.sensitivity = v;
+        if      (a == "--alpha") alpha = v;
+        else if (a == "--wmax") wmax = v;
+        else if (a == "-s") params.sensitivity = v;
         else if (a == "-e") params.extent = v;
         else if (a == "-l") params.maxLengthMs = v;
         else if (a == "-p") params.passes = (int)v;
@@ -90,6 +97,8 @@ int main(int argc, char ** argv) {
 
     declick::Config cfg;
     cfg.compute(params, (double)audio.sampleRate);
+    if (alpha >= 0.0f) cfg.wienerAlpha = alpha;
+    if (wmax >= 0.0f) cfg.wienerMax = wmax;
 
     std::vector<std::unique_ptr<declick::Channel> > chans;
     for (unsigned c = 0; c < channels; ++c) {
@@ -165,6 +174,8 @@ int main(int argc, char ** argv) {
                "max %.1f ms, %d pass%s, order %d\n",
                params.sensitivity, cfg.thresholdHi, params.extent, cfg.thresholdLo,
                params.maxLengthMs, cfg.passes, cfg.passes == 1 ? "" : "es", cfg.order);
+        printf("  depth %.3f, alpha %.3f, wmax %.3f\n",
+               params.depth, cfg.wienerAlpha, cfg.wienerMax);
         printf("  latency %d samples (%.1f ms)\n", cfg.latency,
                1000.0 * cfg.latency / (double)audio.sampleRate);
         printf("  repaired %llu of %llu samples (%.2f%%)\n",

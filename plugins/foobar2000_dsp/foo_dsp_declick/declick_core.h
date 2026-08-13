@@ -55,10 +55,10 @@ struct Params {
         p.sensitivity = 0.6f;
         p.extent      = 0.5f;
         p.maxLengthMs = 4.0f;
-        // 0 follows the curve calibrated against a clean master transfer with
-        // real clicks injected at known positions - the setting that adds the
-        // least error of its own. Raising it removes more of each click but
-        // substitutes more guesswork; see the README.
+        // 0 subtracts the fraction of each click calibrated against a clean
+        // master transfer with real clicks injected at known positions - the
+        // setting that adds the least error of its own. Raising it removes
+        // more of each click but substitutes more guesswork; see the README.
         p.depth       = 0.0f;
         p.passes      = 2;
         p.order       = 32;
@@ -78,8 +78,26 @@ struct Config {
     int    madWindow    = 6615;  //!< samples used for the robust noise estimate
     double thresholdHi  = 3.5;   //!< trigger
     double thresholdLo  = 1.6;   //!< hysteresis extension
-    double depth        = 0.0;   //!< pushes the blend curve towards replacement
+    double depth        = 0.0;   //!< pushes the weighting towards replacement
     double wet          = 1.0;
+
+    //! Subtractive repair. Calibration constants, not derived from params and
+    //! not user-facing.
+    //!
+    //! `wienerMax` is the fraction of the click estimate that gets subtracted.
+    //! 0.45 was measured against injected-click ground truth and against four
+    //! reference transfers; it beats the length-indexed curve it replaced on
+    //! every axis of both.
+    //!
+    //! `wienerAlpha` scales the model's own per-sample estimate variance,
+    //! turning the flat fraction into a true Wiener gain. It is 0 - i.e. off -
+    //! because it was measured and does not pay on 78 rpm material: the click
+    //! is nearly always far larger than the estimate's uncertainty, so the
+    //! gain saturates and only the cap binds. Retained because it costs
+    //! nothing when off and material with different click statistics may
+    //! behave differently; declick_cli can sweep it. See the README.
+    double wienerAlpha  = 0.0;
+    double wienerMax    = 0.45;
     int    pad          = 272;   //!< context needed either side of a block
     int    latency      = 784;
 
@@ -142,6 +160,8 @@ private:
     std::vector<double> m_err;       //!< interpolation prediction error
     std::vector<double> m_rhs;       //!< interpolation right hand side
     std::vector<double> m_solve;     //!< Cholesky factor
+    std::vector<double> m_sinv;      //!< banded slice of G^-1
+    std::vector<double> m_pvar;      //!< diag(G^-1), per damaged sample
 
     std::vector<double> m_madRing; //!< |forward residual| history
     int    m_madPos = 0;
@@ -161,9 +181,21 @@ bool levinson(const double * r, int order, double * a);
 
 //! Banded symmetric Toeplitz Cholesky solve, half-bandwidth `band`.
 //! `d` holds the Toeplitz first column (band+1 entries). Solves G x = b in
-//! place on `b`. Returns false if not positive definite.
+//! place on `b`. Returns false if not positive definite. `scratch` is left
+//! holding the Cholesky factor, for bandedInverseDiagonal() below.
 bool solveBandedToeplitz(const double * d, int band, double * b, int n,
                          std::vector<double> & scratch);
+
+//! Diagonal of G^-1, from the factor solveBandedToeplitz() left behind.
+//! Pass the same `band` and `n`; `chol` is that call's scratch vector and
+//! `work` is separate scratch of the caller's. Writes n entries to `diag`.
+//!
+//! Uses Takahashi's recursion, which computes the banded slice of the inverse
+//! in O(n * band^2) rather than inverting outright: filling from the bottom
+//! right, every term needed is either already written or the symmetric
+//! counterpart of one that is.
+bool bandedInverseDiagonal(const std::vector<double> & chol, int band, int n,
+                           std::vector<double> & work, double * diag);
 
 } // namespace declick
 

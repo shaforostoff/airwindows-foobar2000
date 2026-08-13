@@ -41,7 +41,7 @@ BEGIN
     CONTROL         "",IDC_SLIDER_DRYWET,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,141,178,15
     RTEXT           "1.000",IDC_VALUE_DRYWET,244,144,41,8
 
-    LTEXT           "Sensitivity is the one to reach for: raise it until the crackle goes, then back off as soon as the music dulls. Repair depth 0 adds the least error of its own; raise it to strip more of each click at the cost of more guesswork.",
+    LTEXT           "Sensitivity is the one to reach for: raise it until the crackle goes, then back off as soon as the music dulls. Repair depth 0 subtracts the fraction of each click that adds the least error of its own; raise it to strip more, at the cost of more guesswork.",
                     IDC_HINT,7,164,278,26
 
     PUSHBUTTON      "&Defaults",IDC_DEFAULTS,7,193,54,15

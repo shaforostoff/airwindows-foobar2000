@@ -3,6 +3,8 @@
 #
 #   decrackle_verify  - DSP core vs. a literal transcription of the Airwindows
 #                       VST source, plus robustness and throughput. No SDK.
+#   declick_verify    - the declicker's AR linear algebra vs. dense brute
+#                       force, plus streaming properties. No SDK.
 #   preset_roundtrip  - every parameter survives save/load. Links the SDK, so
 #                       it needs foobar2000's shared.dll; skips if absent.
 #   component_smoke   - loads the built DLL through foobar2000's own service
@@ -28,6 +30,24 @@ if(MSVC)
 endif()
 
 add_test(NAME decrackle_verify COMMAND decrackle_verify)
+
+# ---------------------------------------------------------------------------
+# The declicker's linear algebra, against dense brute force. No SDK.
+
+add_executable(declick_verify
+    declick_verify.cpp
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_declick/declick_core.cpp"
+)
+
+target_include_directories(declick_verify PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../foo_dsp_declick")
+
+if(MSVC)
+    target_compile_options(declick_verify PRIVATE /W4)
+endif()
+
+add_test(NAME declick_verify COMMAND declick_verify)
+set_target_properties(declick_verify PROPERTIES FOLDER "tests")
 
 # ---------------------------------------------------------------------------
 # Preset serialisation. Always built - a compile break here is worth catching
