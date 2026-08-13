@@ -77,8 +77,8 @@ file installs correctly on every version.
 # Build only one component
 .\scripts\build_release.ps1 -Component foo_dsp_declick
 
-# Supported Windows 7 build (see the note below)
-.\scripts\build_release.ps1 -Toolset v142
+# Windows 7 compatible build, verified before packaging (see the note below)
+.\scripts\build_release.ps1 -Win7
 
 # Assume AVX2 - only if the playback machine definitely has it
 .\scripts\build_release.ps1 -InstructionSet AVX2
@@ -88,19 +88,59 @@ file installs correctly on every version.
 
 ### Targeting Windows 7
 
-The default `SSE2` baseline runs on anything that runs Windows 7, and the
-static CRT means no Visual C++ redistributable is needed.
-
-One caveat that is **not** about this project: from Visual Studio 2022 17.10
-onward, the v143 toolset no longer supports Windows 7 as a target. For a
-supported Windows 7 binary, build with the v142 toolset:
-
 ```powershell
-.\scripts\build_release.ps1 -Toolset v142
+.\scripts\build_release.ps1 -Win7
 ```
 
-v142 ships with Visual Studio 2019, or as the *MSVC v142 – VS 2019 C++ build
-tools* individual component inside the Visual Studio 2022 installer.
+`-Win7` picks the newest installed MSVC toolset that still supports Windows 7
+(v142, otherwise v141), and runs `scripts\check_win7.ps1` over the built DLLs
+before packaging, so a component that cannot load on Windows 7 is never
+produced.
+
+The defaults already do most of the work: the `SSE2` baseline runs on anything
+Windows 7 runs on, `_WIN32_WINNT=0x0601` keeps newer APIs out of reach at
+compile time, and the static CRT means the Visual C++ redistributable — which
+no longer installs on Windows 7 from version 14.40 onward — is not needed.
+
+What `-Win7` adds is the toolset. From Visual Studio 2022 17.10 onward, v143
+dropped Windows 7 as a supported target. v142 ships with Visual Studio 2019, or
+as the *MSVC v142 – VS 2019 C++ build tools* individual component in the Visual
+Studio 2022 installer; v141 ships with Visual Studio 2017. If neither is
+installed, `-Win7` warns and builds with v143 anyway — the check still runs, but
+the result is not something Microsoft supports.
+
+The Windows SDK version is a red herring here. `cmake` reporting
+
+```
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.19045.
+```
+
+says which headers and import libraries are used, not which Windows versions
+the binary runs on — that is decided by `_WIN32_WINNT`, the toolset and the CRT.
+`-WindowsSdk 10.0.17763.0` pins an older one if you want it, but note that the
+foobar2000 SDK needs `ERROR_NO_SUCH_DEVICE`, which SDK 10.0.17763.0 does not
+define.
+
+#### Checking a binary on its own
+
+```powershell
+.\scripts\check_win7.ps1 dist\foo_dsp_declick-1.0.0.fb2k-component
+```
+
+Takes DLLs, directories or `.fb2k-component` archives, and reports anything
+that would stop the image from loading on Windows 7:
+
+- a minimum OS or subsystem version above 6.1 in the PE header,
+- imports from `api-ms-win-*` / `ext-ms-*` API sets, `combase.dll` or
+  `shcore.dll`, none of which exist on Windows 7,
+- imports of `vcruntime140.dll`, `msvcp140.dll` or `ucrtbase.dll`, i.e. a
+  dynamic CRT,
+- individual Windows 8/8.1/10 exports, such as the `WaitOnAddress` family a
+  modern STL likes to reach for.
+
+It is a load-time check. Functions resolved at runtime through `GetProcAddress`
+are invisible to it, and so is the instruction set the code was compiled for —
+an `AVX2` build loads fine on a CPU without AVX2 and then crashes.
 
 ---
 
@@ -537,6 +577,7 @@ cmake/
   fb2k_find_runtime.cmake         locates an installed foobar2000 for the smoke test
 scripts/
   build_release.ps1               the release build + packaging entry point
+  check_win7.ps1                  reads a built DLL's PE headers and imports for Windows 7 compatibility
   get_sdk.ps1                     wrapper around fb2k_download_sdk.cmake
 foo_dsp_decrackle/
   decrackle_core.{h,cpp}          the DSP (scalar + SSE2); no foobar2000 or Win32 dependency

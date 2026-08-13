@@ -25,10 +25,24 @@
     MSVC platform toolset. Leave unset for the newest installed one. Use v142
     (Visual Studio 2019, or the "MSVC v142 build tools" component of Visual
     Studio 2022) if the binaries have to run on Windows 7 - v143 from Visual
-    Studio 2022 17.10 onwards no longer supports it.
+    Studio 2022 17.10 onwards no longer supports it. See -Win7, which picks a
+    suitable toolset by itself.
 
 .PARAMETER Generator
     CMake generator. Default: whatever CMake picks for the installed VS.
+
+.PARAMETER Win7
+    Build something that loads on Windows 7: pick the newest installed MSVC
+    toolset that still supports it (v142, else v141), and run
+    scripts\check_win7.ps1 over the finished components, failing the build if
+    anything in them needs a newer Windows. Implies the SSE2 baseline and the
+    static CRT.
+
+.PARAMETER WindowsSdk
+    Windows SDK version, e.g. 10.0.17763.0. Default: whatever CMake picks,
+    which is the newest installed. The SDK version is not what decides which
+    Windows versions the binary runs on - _WIN32_WINNT and the toolset are -
+    so there is rarely a reason to set this.
 
 .PARAMETER InstructionSet
     SSE2 (default, runs anywhere Windows 7 does), AVX or AVX2. Only pick a
@@ -45,8 +59,8 @@
     .\scripts\build_release.ps1
 
 .EXAMPLE
-    # Supported Windows 7 build
-    .\scripts\build_release.ps1 -Toolset v142
+    # Windows 7 compatible build, verified before it is packaged
+    .\scripts\build_release.ps1 -Win7
 #>
 
 [CmdletBinding()]
@@ -59,6 +73,8 @@ param(
     [string]   $Generator = '',
     [ValidateSet('SSE2', 'AVX', 'AVX2')]
     [string]   $InstructionSet = 'SSE2',
+    [switch]   $Win7,
+    [string]   $WindowsSdk = '',
     [switch]   $SkipTests,
     [switch]   $Clean
 )
@@ -74,6 +90,79 @@ $symbols = Join-Path $root 'build\_symbols'
 function Invoke-Checked([string] $what, [scriptblock] $action) {
     & $action
     if ($LASTEXITCODE -ne 0) { throw "$what failed with exit code $LASTEXITCODE" }
+}
+
+# --- Windows 7 toolset ------------------------------------------------------
+# v143 dropped Windows 7 as a target in Visual Studio 2022 17.10. v142 and v141
+# still support it, wherever they happen to be installed - and a toolset can
+# only be driven by the generator of the Visual Studio it lives in, so the two
+# have to be chosen together.
+function Select-Win7Toolset {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path $vswhere)) { return $null }
+
+    $json = & $vswhere -all -products * -format json
+    if (-not $json) { return $null }
+
+    # Newest Visual Studio first, so a v142 installed next to v143 in Visual
+    # Studio 2022 is preferred over one in a separate 2019 installation.
+    $installs = @(ConvertFrom-Json ($json -join "`n") | ForEach-Object {
+        [pscustomobject] @{
+            Path  = $_.installationPath
+            Major = [int] (($_.installationVersion -split '\.')[0])
+        }
+    } | Sort-Object Major -Descending)
+
+    foreach ($prefix in @('14.2', '14.1')) {      # v142, then v141
+        foreach ($install in $installs) {
+            $tools = Join-Path $install.Path 'VC\Tools\MSVC'
+            if (-not (Test-Path $tools)) { continue }
+            $hit = Get-ChildItem $tools -Directory -ErrorAction SilentlyContinue |
+                       Where-Object { $_.Name.StartsWith($prefix) } |
+                       Sort-Object Name -Descending | Select-Object -First 1
+            if (-not $hit) { continue }
+
+            $toolset = 'v141'
+            if ($prefix -eq '14.2') { $toolset = 'v142' }
+            $generator = ''
+            switch ($install.Major) {
+                17 { $generator = 'Visual Studio 17 2022' }
+                16 { $generator = 'Visual Studio 16 2019' }
+                15 { $generator = 'Visual Studio 15 2017' }
+            }
+            return [pscustomobject] @{
+                Toolset   = $toolset
+                Generator = $generator
+                Compiler  = $hit.Name
+                Install   = $install.Path
+            }
+        }
+    }
+    return $null
+}
+
+if ($Win7) {
+    if ($InstructionSet -ne 'SSE2') {
+        Write-Warning "-InstructionSet $InstructionSet with -Win7: $InstructionSet needs Windows 7 SP1 and a CPU that supports it."
+    }
+    if ($Toolset -or $Generator) {
+        Write-Host "-Win7: keeping the toolset/generator given on the command line." -ForegroundColor Yellow
+    }
+    else {
+        $pick = Select-Win7Toolset
+        if ($pick) {
+            $Toolset = $pick.Toolset
+            if ($pick.Generator) { $Generator = $pick.Generator }
+            Write-Host ("-Win7: using {0} (MSVC {1}) from {2}" -f
+                $pick.Toolset, $pick.Compiler, $pick.Install) -ForegroundColor Cyan
+        }
+        else {
+            Write-Warning ("-Win7: no v142 or v141 toolset found, falling back to the default one. " +
+                "v143 no longer supports Windows 7 as a target; the check at the end of this build " +
+                "still verifies the result, but Microsoft does not support it. Install the " +
+                "`"MSVC v142 - VS 2019 C++ build tools`" component to get a supported build.")
+        }
+    }
 }
 
 # --- read each version out of version.h so archive names match the DLLs -----
@@ -101,8 +190,9 @@ foreach ($a in $Arch) {
              '-DFOO_DSP_STATIC_CRT=ON',
              '-DFOO_DSP_LTO=ON',
              '-DCMAKE_BUILD_TYPE=Release')
-    if ($Generator) { $cfg += @('-G', $Generator) }
-    if ($Toolset)   { $cfg += @('-T', $Toolset) }
+    if ($Generator)  { $cfg += @('-G', $Generator) }
+    if ($Toolset)    { $cfg += @('-T', $Toolset) }
+    if ($WindowsSdk) { $cfg += "-DCMAKE_SYSTEM_VERSION=$WindowsSdk" }
     Invoke-Checked "cmake configure ($a)" { & cmake @cfg }
 
     Write-Host "`n=== Building $a ===" -ForegroundColor Cyan
@@ -136,6 +226,16 @@ foreach ($a in $Arch) {
 
         $info = Get-Item $built
         Write-Host ("  {0,-18} {1,-4} {2,9:N0} bytes" -f $c, $a, $info.Length) -ForegroundColor Green
+    }
+}
+
+# --- Windows 7 verification -------------------------------------------------
+# Before packaging, so a component that cannot load there is never produced.
+if ($Win7) {
+    Write-Host "`n=== Windows 7 check ===" -ForegroundColor Cyan
+    & (Join-Path $PSScriptRoot 'check_win7.ps1') -Path $stage
+    if ($LASTEXITCODE -ne 0) {
+        throw "The built components need something newer than Windows 7 - see above."
     }
 }
 
