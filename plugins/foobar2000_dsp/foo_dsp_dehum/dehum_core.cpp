@@ -141,6 +141,14 @@ void Config::compute(const Params & pIn, double rate) {
 
     halfWidth = (double)p.bandwidth;
     lamNotch  = clampd(2.0 * kPi * halfWidth / sampleRate, 1e-9, 0.5);
+
+    lamCohNarrow = clampd(2.0 * kPi * kCohNarrowHz / sampleRate, 1e-12, 0.5);
+    lamCohWide   = clampd(2.0 * kPi * kCohWideHz / sampleRate, 1e-12, 0.5);
+    cohBinHi     = clampi((int)ceil(kCohCeilingHz / df), binLo + 2, binHi);
+    cohThreshold = kCohThreshold;
+    cohSettle    = clampi((int)(kCohWindowSec * sampleRate + 0.5), 1024, 1 << 26);
+    // The sums decay rather than reset, so the ratio is a long-window statistic.
+    cohSmooth    = exp(-(double)hop / (kCohWindowSec * sampleRate));
     harmonics = p.harmonics;
     manualFreq = (double)p.frequency;
     rumbleHz   = (double)p.rumbleHz;
@@ -354,7 +362,7 @@ void Channel::syncHarmonics(Line & line) {
     }
 }
 
-double Channel::runOsc(Osc & o, double x) {
+double Channel::runOsc(Osc & o, double x, bool probe) {
     // z = x * conj(e), with e = exp(i*theta)
     const double zr =  x * o.cosPh;
     const double zi = -x * o.sinPh;
@@ -362,6 +370,17 @@ double Channel::runOsc(Osc & o, double x) {
     o.wIm += m_cfg.lamNotch * (zi - o.wIm);
     // 2*Re{w*e}: the coherent part of x at this frequency
     const double est = 2.0 * (o.wRe * o.cosPh - o.wIm * o.sinPh);
+
+    if (probe) {
+        // The tonality pair. Same heterodyne, two very different bandwidths.
+        o.cnRe += m_cfg.lamCohNarrow * (zr - o.cnRe);
+        o.cnIm += m_cfg.lamCohNarrow * (zi - o.cnIm);
+        o.cwRe += m_cfg.lamCohWide * (zr - o.cwRe);
+        o.cwIm += m_cfg.lamCohWide * (zi - o.cwIm);
+        o.sumN += o.cnRe * o.cnRe + o.cnIm * o.cnIm;
+        o.sumW += o.cwRe * o.cwRe + o.cwIm * o.cwIm;
+        if (o.lived < (1 << 30)) ++o.lived;
+    }
 
     const double c = o.cosPh * o.cosInc - o.sinPh * o.sinInc;
     const double s = o.sinPh * o.cosInc + o.cosPh * o.sinInc;
@@ -379,8 +398,17 @@ double Channel::runOsc(Osc & o, double x) {
 
 double Channel::runLine(Line & line, double x) {
     double y = x;
-    for (int h = 0; h < (int)kMaxHarmonics; ++h) {
-        if (line.osc[h].live) y = runOsc(line.osc[h], y);
+    // The fundamental always runs - an inactive line is a probe, and a probe has
+    // to be measured before there is anything to decide. Only its output is
+    // withheld until the line is confirmed.
+    if (line.osc[0].live) {
+        const double cleaned = runOsc(line.osc[0], y, true);
+        if (line.active) y = cleaned;
+    }
+    if (line.active) {
+        for (int h = 1; h < (int)kMaxHarmonics; ++h) {
+            if (line.osc[h].live) y = runOsc(line.osc[h], y, false);
+        }
     }
 
     Osc & f = line.osc[0];
@@ -413,6 +441,37 @@ double Channel::runLine(Line & line, double x) {
         f.trackAcc = 0;
     }
     return y;
+}
+
+//! Read each probe's tonality once a hop and turn it into evidence.
+//!
+//! Confined to lines below kCohCeilingHz: above that a sustained musical note is
+//! indistinguishable from a hum by this measure, and scores higher than either
+//! real line on the reference material.
+void Channel::updateCoherence() {
+    for (int i = 0; i < m_lines; ++i) {
+        Line & L = m_line[i];
+        Osc & f = L.osc[0];
+        if (!f.live) continue;
+
+        if (f.sumW > 1e-300) f.coh = sqrt(f.sumN / f.sumW);
+        if (f.coh > 1.5) f.coh = 1.5;
+        // Forget rather than reset: the ratio is meant to be read over
+        // kCohWindowSec, not over one hop. See the note on that constant.
+        f.sumN *= m_cfg.cohSmooth;
+        f.sumW *= m_cfg.cohSmooth;
+
+        if (L.manual) continue;
+        if (f.lived < m_cfg.cohSettle) continue;
+        if (L.detected > kCohCeilingHz) continue;
+
+        const double bar = L.active ? m_cfg.cohThreshold - kCohRetainMargin
+                                    : m_cfg.cohThreshold;
+        if (f.coh >= bar) L.cohScore += 1.0;
+        else L.cohScore -= L.active ? kScoreFallActive : kScoreFall;
+        if (L.cohScore < 0.0) L.cohScore = 0.0;
+        if (L.cohScore > kScoreCap) L.cohScore = kScoreCap;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -620,6 +679,39 @@ void Channel::detectPeaks(int bins) {
         candF[at] = f;
         candP[at] = prom;
     }
+
+    // Second nomination pass, for the coherence route: the loudest local maxima
+    // in the low band, prominent or not. This is how a line standing at the
+    // level of the pedestal it sits on gets a probe at all - it will never clear
+    // a prominence threshold, so nothing above decides it is worth looking at.
+    {
+        const int cohBins = m_cfg.cohBinHi - m_cfg.binLo + 1;
+        for (int n = 0; n < (int)kNominees; ++n) {
+            int best = -1;
+            for (int i = 1; i < cohBins - 1 && i < bins - 1; ++i) {
+                if (m_med[(size_t)i] < m_med[(size_t)(i - 1)]) continue;
+                if (m_med[(size_t)i] < m_med[(size_t)(i + 1)]) continue;
+                const double fi = (double)(m_cfg.binLo + i) * df;
+                bool taken = false;
+                for (int c = 0; c < nc; ++c) {
+                    if (fabs(candF[c] - fi) < 1.5 * df) { taken = true; break; }
+                }
+                if (taken) continue;
+                if (best < 0 || m_med[(size_t)i] > m_med[(size_t)best]) best = i;
+            }
+            if (best < 0 || nc >= (int)kCandidates) break;
+            const double a = m_med[(size_t)(best - 1)];
+            const double b = m_med[(size_t)best];
+            const double c = m_med[(size_t)(best + 1)];
+            const double d = a - 2.0 * b + c;
+            double off = (fabs(d) < 1e-12) ? 0.0 : 0.5 * (a - c) / d;
+            off = clampd(off, -0.5, 0.5);
+            candF[nc] = ((double)(m_cfg.binLo + best) + off) * df;
+            candP[nc] = m_med[(size_t)best] - m_base[(size_t)best];
+            ++nc;
+        }
+    }
+
     for (int c = 0; c < nc; ++c) candTaken[c] = false;
 
     const double tol = 1.5 * df;
@@ -646,19 +738,26 @@ void Channel::detectPeaks(int bins) {
         candTaken[best] = true;
         // Slew where the detector believes the line is. This is the slow half of
         // frequency tracking: it follows drift that the notch's own tracker is
-        // clamped out of, and it re-centres that clamp window.
+        // clamped out of, and it re-centres that clamp window. Only the notch's
+        // own tracker moves the oscillator; this just re-centres its limits.
         m_line[i].detected += 0.25 * (candF[best] - m_line[i].detected);
         m_line[i].prom = candP[best];
-        m_line[i].score += scoreFor(candP[best]);
-        if (m_line[i].score > kScoreCap) m_line[i].score = kScoreCap;
+        // Prominence evidence only accrues from prominent sightings; a nominee
+        // that is merely a local maximum keeps the line alive as a probe but
+        // does not argue that it is hum.
+        if (candP[best] >= m_cfg.promDb) {
+            m_line[i].score += scoreFor(candP[best]);
+            if (m_line[i].score > kScoreCap) m_line[i].score = kScoreCap;
+        }
     }
 
-    // Whatever is left over, strongest first, can start a new line - but only on
-    // the full threshold, never the retain discount.
+    // Whatever is left over, strongest first, can start a new line. A prominent
+    // peak earns prominence evidence immediately; a bare nominee starts at zero
+    // and has kCohSettleSec to prove itself by coherence instead.
     while (m_lines < (int)kMaxLines) {
         int best = -1;
         for (int c = 0; c < nc; ++c) {
-            if (candTaken[c] || candP[c] < m_cfg.promDb) continue;
+            if (candTaken[c]) continue;
             if (best < 0 || candP[c] > candP[best]) best = c;
         }
         if (best < 0) break;
@@ -673,15 +772,22 @@ void Channel::detectPeaks(int bins) {
         m_line[at] = Line();
         m_line[at].detected = candF[best];
         m_line[at].prom = candP[best];
-        m_line[at].score = scoreFor(candP[best]);
+        m_line[at].score = (candP[best] >= m_cfg.promDb) ? scoreFor(candP[best]) : 0.0;
+        // The probe starts now, not at activation: the coherence measurement
+        // needs the frequency tracker to have locked first, and restarting the
+        // oscillator when the line engages would throw that lock away.
+        startOsc(m_line[at].osc[0], m_line[at].detected);
     }
 
     for (int i = 0; i < m_lines; ++i) {
-        if (m_line[i].active || m_line[i].score < m_cfg.scoreActivate) continue;
-        // Engaging on the score alone; nothing here looks at how long it took.
+        if (m_line[i].active) continue;
+        const bool byProm = m_line[i].score >= m_cfg.scoreActivate;
+        const bool byCoh  = m_line[i].cohScore >= (double)kCohScoreActivate;
+        if (!byProm && !byCoh) continue;
         m_line[i].active = true;
+        m_line[i].viaCoh = !byProm;
         ++m_confirmations;
-        startOsc(m_line[i].osc[0], m_line[i].detected);
+        if (!m_line[i].osc[0].live) startOsc(m_line[i].osc[0], m_line[i].detected);
         syncHarmonics(m_line[i]);
     }
 
@@ -691,25 +797,31 @@ void Channel::detectPeaks(int bins) {
     // evidence is discarded.
     const double merge = 2.0 * m_cfg.halfWidth;
     for (int i = 0; i < m_lines; ++i) {
-        if (m_line[i].score <= 0.0) continue;
-        const double fi = m_line[i].active ? m_line[i].osc[0].freq
-                                           : m_line[i].detected;
+        if (m_line[i].osc[0].live == false) continue;
+        const double fi = m_line[i].osc[0].freq;
         for (int j = i + 1; j < m_lines; ++j) {
-            if (m_line[j].score <= 0.0) continue;
-            const double fj = m_line[j].active ? m_line[j].osc[0].freq
-                                               : m_line[j].detected;
+            if (!m_line[j].osc[0].live) continue;
+            const double fj = m_line[j].osc[0].freq;
             if (fabs(fi - fj) >= merge) continue;
-            const int drop = (m_line[i].score >= m_line[j].score) ? j : i;
+            const double ei = m_line[i].score + m_line[i].cohScore;
+            const double ej = m_line[j].score + m_line[j].cohScore;
+            const int drop = (ei >= ej) ? j : i;
             m_line[drop].score = 0.0;
+            m_line[drop].cohScore = 0.0;
+            m_line[drop].osc[0].lived = m_cfg.cohSettle;  // no grace on a merge
             m_line[drop].active = false;   // a merge is not a dropout
             if (drop == i) break;
         }
     }
 
-    // Forget the ones whose evidence has run out, keeping the array packed.
+    // Forget the ones whose evidence has run out, keeping the array packed. A
+    // young probe is spared: it is still being measured, and dropping it before
+    // kCohSettleSec would mean the coherence route never got to answer.
     int w = 0;
     for (int i = 0; i < m_lines; ++i) {
-        if (m_line[i].score <= 0.0) {
+        const bool spent = m_line[i].score <= 0.0 && m_line[i].cohScore <= 0.0;
+        const bool young = m_line[i].osc[0].lived < m_cfg.cohSettle;
+        if (spent && !young) {
             if (m_line[i].active) ++m_dropouts;
             continue;
         }
@@ -742,13 +854,14 @@ void Channel::process(Sample * io, size_t frames, size_t stride) {
         if (m_filled < N) ++m_filled;
         if (++m_hopAcc >= m_cfg.hop) {
             m_hopAcc = 0;
-            if (m_filled >= N) runDetector();
+            updateCoherence();                 // probes are read every hop
+            if (m_filled >= N) runDetector();  // nomination needs a full window
         }
 
         double y = x;
-        for (int L = 0; L < m_lines; ++L) {
-            if (m_line[L].active) y = runLine(m_line[L], y);
-        }
+        // Every line runs, active or not: an inactive one is a probe being
+        // measured, and it must see the same signal a confirmed line would.
+        for (int L = 0; L < m_lines; ++L) y = runLine(m_line[L], y);
         if (m_hpOn) y = runRumble(y);
 
         // wet == 0 returns x untouched, bit for bit.
@@ -776,6 +889,8 @@ void Channel::report(LineReport * out, int max, int * count) const {
         out[n].detected   = m_line[i].detected;
         out[n].prominence = m_line[i].prom;
         out[n].amplitude  = 2.0 * sqrt(o.wRe * o.wRe + o.wIm * o.wIm);
+        out[n].coherence  = o.coh;
+        out[n].viaCoherence = m_line[i].viaCoh;
         int h = 0;
         for (int k = 0; k < (int)kMaxHarmonics; ++k) if (m_line[i].osc[k].live) ++h;
         out[n].harmonics = h;

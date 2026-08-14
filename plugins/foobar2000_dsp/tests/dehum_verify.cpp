@@ -134,6 +134,7 @@ void testNotchDepth() {
         p.frequency = (float)f;
         p.harmonics = 1;
         p.bandwidth = (float)bw[k];
+        p.rumbleHz = 0.0f;   // measuring the notch, not the high-pass
         dehum::Channel ch;
         ch.configure(makeConfig(p, sr));
         std::vector<double> buf((size_t)(sr * 20.0), 0.0);
@@ -164,6 +165,7 @@ void testNotchSelectivity() {
     p.frequency = 50.0f;
     p.harmonics = 1;
     p.bandwidth = 1.0f;
+    p.rumbleHz = 0.0f;   // measuring the notch, not the high-pass
     dehum::Channel ch;
     ch.configure(makeConfig(p, sr));
     const double f = 55.0;
@@ -192,6 +194,7 @@ void testTracker() {
         p.frequency = (float)(trueF + offsets[k]);
         p.harmonics = 1;
         p.bandwidth = 1.0f;
+        p.rumbleHz = 0.0f;   // measuring the notch, not the high-pass
         dehum::Channel ch;
         ch.configure(makeConfig(p, sr));
         std::vector<double> buf((size_t)(sr * 40.0), 0.0);
@@ -216,12 +219,61 @@ void testTracker() {
     }
 }
 
+//! The tonality ratio has an analytic value for both extremes: 1 for a pure
+//! tone, and sqrt(narrow/wide) for noise, because a one-pole's output variance
+//! is proportional to its bandwidth. Pinning both ends catches a wrong
+//! coefficient, a swapped pair, or an accumulator that is not measuring what it
+//! is supposed to.
+void testCoherenceScale() {
+    printf("\ncoherence, against its analytic values\n");
+    const double sr = 44100.0;
+    const double f = 50.0;
+    const double noiseFloor = sqrt(dehum::kCohNarrowHz / dehum::kCohWideHz);
+
+    struct Case { const char * name; bool tone; bool noise; double want; };
+    const Case cases[3] = {
+        { "pure tone",             true,  false, 1.0 },
+        { "white noise only",      false, true,  noiseFloor },
+        { "tone 20 dB over noise", true,  true,  1.0 },
+    };
+    for (int k = 0; k < 3; ++k) {
+        dehum::Params p = dehum::Params::defaults();
+        p.frequency = (float)f;      // pin the probe exactly on it
+        p.harmonics = 1;
+        p.rumbleHz = 0.0f;
+        p.dryWet = 0.0f;             // measure, do not subtract
+        dehum::Channel ch;
+        ch.configure(makeConfig(p, sr));
+        std::vector<double> buf((size_t)(sr * 40.0), 0.0);
+        Rng rng;
+        for (size_t i = 0; i < buf.size(); ++i) {
+            double v = 0.0;
+            if (cases[k].tone) v += 0.02 * sin(2.0 * kPi * f * (double)i / sr);
+            if (cases[k].noise) v += (cases[k].tone ? 0.002 : 0.02) * rng.next();
+            buf[i] = v;
+        }
+        runChannel(ch, buf, 4096);
+        dehum::LineReport rep[dehum::kMaxLines];
+        int n = 0;
+        ch.report(rep, (int)dehum::kMaxLines, &n);
+        const double got = n ? rep[0].coherence : -1.0;
+        char msg[180];
+        snprintf(msg, sizeof(msg), "%-24s coherence %.3f (analytic %.3f)",
+                 cases[k].name, got, cases[k].want);
+        check(n >= 1 && fabs(got - cases[k].want) < 0.12, msg);
+    }
+}
+
 //! End to end on synthetic material with a known answer.
 void testAutoDetectAndRemove() {
     printf("\nautomatic detection and removal\n");
     const double sr = 44100.0;
     const double f = 41.28;
     dehum::Params p = dehum::Params::defaults();
+    // Rumble off, so what is measured is the notch alone. With it on, the
+    // high-pass would take a share of the 41 Hz tone too and the "how much of
+    // what was removed is the line" figure would no longer mean anything.
+    p.rumbleHz = 0.0f;
     dehum::Channel ch;
     ch.configure(makeConfig(p, sr));
     std::vector<double> buf((size_t)(sr * 60.0), 0.0);
@@ -267,6 +319,9 @@ void testCleanMaterialUntouched() {
     printf("\nclean material\n");
     const double sr = 44100.0;
     dehum::Params p = dehum::Params::defaults();
+    // Rumble off: this test is about the *detector* not firing on music, and
+    // the high-pass legitimately changes the signal whether it fires or not.
+    p.rumbleHz = 0.0f;
     dehum::Channel ch;
     ch.configure(makeConfig(p, sr));
     std::vector<double> buf((size_t)(sr * 40.0), 0.0);
@@ -389,6 +444,7 @@ void testSampleRates() {
         dehum::Params p = dehum::Params::defaults();
         p.frequency = 50.0f;
         p.harmonics = 4;
+        p.rumbleHz = 0.0f;   // measuring the notch, not the high-pass
         dehum::Channel ch;
         dehum::Config cfg = makeConfig(p, sr);
         ch.configure(cfg);
@@ -489,6 +545,7 @@ int main() {
     testNotchDepth();
     testNotchSelectivity();
     testTracker();
+    testCoherenceScale();
     testAutoDetectAndRemove();
     testCleanMaterialUntouched();
     testBypassIsExact();

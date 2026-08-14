@@ -27,7 +27,7 @@ BEGIN
 
     LTEXT           "Harmonics",IDC_STATIC,7,78,52,8
     CONTROL         "",IDC_SLIDER_HARMONICS,"msctls_trackbar32",TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP,62,75,178,15
-    RTEXT           "4",IDC_VALUE_HARMONICS,244,78,41,8
+    RTEXT           "1",IDC_VALUE_HARMONICS,244,78,41,8
 
     LTEXT           "Frequency",IDC_STATIC,7,100,52,8
     CONTROL         "",IDC_SLIDER_FREQUENCY,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,97,178,15
@@ -35,7 +35,7 @@ BEGIN
 
     LTEXT           "Rumble",IDC_STATIC,7,122,52,8
     CONTROL         "",IDC_SLIDER_RUMBLE,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,119,178,15
-    RTEXT           "off",IDC_VALUE_RUMBLE,244,122,41,8
+    RTEXT           "40 Hz",IDC_VALUE_RUMBLE,244,122,41,8
 
     LTEXT           "Dry/Wet",IDC_STATIC,7,144,52,8
     CONTROL         "",IDC_SLIDER_DRYWET,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,141,178,15

@@ -634,9 +634,9 @@ Add *Dehum (line detection)* to the chain and press **Configure selected**.
 | **Sensitivity** | How prominent a line has to be. 0 → 22 dB, 1 → 10 dB; the default 0.5 is 16 dB. Raise it if hum survives, lower it if music is being touched. |
 | **Bandwidth** | Half width of each notch, 0.1–5 Hz. Wider catches a drifting line at the cost of more music around it. |
 | **Search to** | Top of the range searched automatically, 40–500 Hz. The bottom is fixed at 16 Hz. |
-| **Harmonics** | Multiples of each detected line to cancel as well, 1–8. Locked to exact multiples of the fundamental, not tracked separately. |
+| **Harmonics** | Multiples of each detected line to cancel as well, 1–8, default **1**. Locked to exact multiples of the fundamental, not tracked separately. Raise it for a genuine mains buzz; leave it alone otherwise, because a notch removes the coherent part at its frequency whether or not that part is hum — see below. |
 | **Frequency** | 0 = detect automatically. Anything else pins the fundamental there and turns the detector off. **This is the control to use if you already know the frequency**, because it acts immediately where detection needs a few seconds. |
-| **Rumble** | 0 = off, otherwise a 4th-order Butterworth high-pass. Broadband low-frequency noise is a *different defect* from hum — see below — and this is the control for it. |
+| **Rumble** | 4th-order Butterworth high-pass, default **40 Hz**, 0 = off. Broadband low-frequency noise is a *different defect* from hum — see below — and this is the control for it. 40 Hz is the cautious end: about 4 dB out of the 32–45 Hz band, nothing above 90 Hz touched. **60 Hz is what the rumbly reference transfer actually wants** (12.9 dB) and is the first thing to try if rumble survives. |
 | **Dry/Wet** | 0 bypasses, bit-exactly. |
 
 Latency is **zero**: the detector reads the signal but does not sit in the path,
@@ -661,10 +661,29 @@ showed that the two files do not have the same defect:
 
 *La tablada* has a genuine hum: a single line at **41.3 Hz**, 38 dB above the
 clean transfer at that bin and stable to ±0.02 Hz across the whole side.
-*Cachirulo* has **no line at all** — its excess is smooth across 33–62 Hz, which
-is turntable rumble. That is why Rumble exists as a separate control, and why it
-is off by default: it is not hum, and whether to filter it is a judgement about
-the transfer.
+
+*Cachirulo* is mostly a **different defect**. Its excess is smooth across
+33–62 Hz — turntable rumble, not hum — and that is what dominates the sound.
+There is also a faint coherent line at **38.94 Hz** (confirmed by a heterodyne
+coherence probe: 0.51 against a local background of 0.14–0.27, and 0.16 at the
+same frequency in its clean control), but it is worth almost nothing next to the
+rumble:
+
+| cachirulo, 32–45 Hz | level | gain |
+| --- | --- | --- |
+| original | −39.5 dB | |
+| cancelling the 38.94 Hz line | −41.2 dB | 1.7 dB |
+| **Rumble at 60 Hz** | **−52.4 dB** | **12.9 dB** |
+| both | −53.4 dB | 13.9 dB |
+| its clean control | −57.4 dB | |
+
+Prominence cannot find that line and cannot be tuned into finding it. Its
+amplitude sits at the level of the pedestal it stands on, so it is not prominent
+at any baseline geometry — measured at four, including guard-banded ones, its
+duty cycle above threshold is 0.0% in every case. That is what the
+[coherence detector](#the-coherence-detector) exists for. **But note the size of
+the prize: for this transfer, Rumble is the control that matters, not either
+detector.**
 
 Note also that neither line is at 50 or 60 Hz, and the two differ from each
 other. A speed-corrected transfer moves whatever was on the disc along with the
@@ -716,6 +735,66 @@ Two consequences worth knowing:
   (6 dB lower, and a miss costs 0.25 instead of 2). Without that the line was
   acquired and dropped **ten times** over one side and removal was intermittent.
   Hum does not come and go; a gap in the evidence means the music got loud.
+
+### The coherence detector
+
+There is a second way in, for lines prominence cannot see. A magnitude spectrum
+cannot tell a coherent tone at level X from noise at level X — only phase can —
+so each candidate also gets two heterodyne integrators at the same frequency and
+very different bandwidths, **0.15 Hz** and **3 Hz**. A continuous tone drives
+both to the same complex amplitude; noise and separate note attacks arrive with
+independent phases, so the narrow one averages them away. The ratio
+`|w_narrow| / |w_wide|` is then a tonality measure that does not care how loud
+the surroundings are. Its two extremes are analytic and are pinned in the tests:
+
+| | pure tone | white noise |
+| --- | --- | --- |
+| measured | **0.993** | **0.222** |
+| analytic | 1 | `sqrt(0.15/3)` = 0.224 |
+
+Three things about it were not obvious, and each was found by being wrong first.
+
+**The narrow bandwidth has to be much narrower than the notch.** A first attempt
+used the notch's own 1 Hz, whose time constant is 0.16 s — shorter than a musical
+note, so it tracked each note individually and scored a recurring note **0.92**,
+indistinguishable from a real hum. At 0.15 Hz the time constant is 1.1 s and the
+same note scores 0.41.
+
+**The ratio has to be accumulated over tens of seconds.** Read over one hop it
+returns 0.9 or better for everything on real transfers, hum-free ones included,
+because turntable rumble is a slowly wandering narrowband process that is
+perfectly tone-like when you only look at it for a fifth of a second. It stops
+looking like one over twenty, and a hum does not. The sums therefore decay with a
+20 s time constant rather than being reset per hop.
+
+**It only works below about 80 Hz**, and that ceiling is not a tuning choice:
+
+| | max coherence below 80 Hz | max 80–150 Hz |
+| --- | --- | --- |
+| la tablada (hum) | **0.571** | 0.394 |
+| cachirulo (hum) | **0.475** | 0.621 ← *a bass note* |
+| la tablada (control) | none | 0.378 |
+| cachirulo (control) | none | 0.323 |
+
+Below 80 Hz the separation is total: both hum transfers score high and neither
+control has a single surviving coherent probe. Above it the order reverses — a
+sustained B♮ at 123.5 Hz out-scores both real hums — because **a held musical
+note is a coherent tone** and nothing computed from the signal can say otherwise.
+Prominence still searches the whole range; only this second route is capped.
+
+The measurement needs the frequency to about 0.15 Hz, far finer than a spectrum
+can nominate, so this only became possible once the frequency tracker existed:
+the nominee is parked on a probe, the tracker locks it, and the ratio is read at
+the locked frequency. Candidates for it are the loudest local maxima of the low
+band whether or not they are prominent — prominence decides nothing here, it only
+suggests where to look.
+
+**What it is worth, honestly.** It does what it was built to do: on the rumbly
+reference it finds the 38.9 Hz line that prominence cannot, and it confirms
+nothing at all on either hum-free control. But the line is so far under the
+rumble that removing it moves that bin by **0.4 dB**. It will matter on material
+where a buried line is stronger; it does not rescue this one, and Rumble is what
+does.
 
 ### Why the window is 1.5 seconds
 
@@ -797,12 +876,14 @@ slightly better than detecting it (the notch is exactly on the line from the
 first sample) and dips below the pedestal.
 
 On the **controls** — the hum-free transfers of the same two performances — the
-detector confirms **no lines at all** and the output is bit-identical to the
-input. That is the result that matters most: a restoration tool that fires on
-clean material is worse than none.
+detector confirms **no lines at all**, and with `Rumble` at 0 the output is
+bit-identical to the input. That is the result that matters most: a restoration
+tool that fires on clean material is worse than none. (At the default `Rumble` of
+40 Hz the output is of course not bit-identical — the high-pass runs regardless
+of what the detector decides.)
 
-On **cachirulo**, which has rumble and no line, the defaults also do nothing.
-`Rumble` at 60 Hz is the control for it:
+On **cachirulo**, whose defect is rumble rather than a prominent line, the
+detector finds nothing and `Rumble` does the work:
 
 | band | input | with Rumble 60 Hz | its clean control |
 | --- | --- | --- | --- |
@@ -811,6 +892,66 @@ On **cachirulo**, which has rumble and no line, the defaults also do nothing.
 | 45–63 Hz | −36.3 | **−41.3** | −56.7 |
 | 63–90 Hz | −33.2 | −33.9 | −43.7 |
 | 90 Hz and up | unchanged | unchanged | |
+
+### Harmonics you do not have cost music
+
+**Harmonics** defaults to 1, and it used to default to 4. That was set while an
+earlier design gated each harmonic by its own tonality measure; the gate was
+removed and the default was not revisited, which is exactly the kind of thing a
+measurement catches and reading the code does not.
+
+Multiples of a low fundamental land in the musical register, and a notch there
+removes the coherent part at its frequency whether or not that part is hum. On
+the rumbly reference with two detected lines and 4 harmonics, six notches fell
+between 80 and 200 Hz and took **84% of everything removed** with them — roughly
+a tenth of the energy in that band — to gain 0.8 dB at the line. Dropping to one
+harmonic changed the same file's removal profile completely:
+
+| share of removed energy | 36–50 Hz | 50–80 Hz | 80–200 Hz |
+| --- | --- | --- | --- |
+| la tablada, 1 harmonic | **99.0%** | 0.2% | 0.5% |
+| cachirulo, 4 harmonics | 4.2% | 7.5% | **84.1%** |
+| cachirulo, 1 harmonic | 30.0% | 55.8% | 13.0% |
+
+A real mains buzz does have harmonics and they are worth removing. An
+off-frequency disc drone generally does not.
+
+### Delta monitoring works for the notch, not for Rumble
+
+`dehum_cli --delta` writes what was removed instead of what was kept, which is
+the quickest way to hear whether a repair is taking music with it. That reading
+is sound for the **notch** and misleading for **Rumble**, and the difference is
+structural rather than a matter of degree.
+
+What a notch removes really is confined to the line. Measured on the reference
+transfer, the share of the removed energy by band:
+
+| 36–42 Hz | 42–60 Hz | 60–200 Hz | 200 Hz–2 kHz | above 2 kHz |
+| --- | --- | --- | --- | --- |
+| **79.1%** | 11.1% | 7.1% | 0.32% | **0.00%** |
+
+Rumble's delta, by contrast, contains the whole spectrum, and that is unavoidable
+for any minimum-phase high-pass. What gets removed is `1 - H`, and at high
+frequency `H → 1` does *not* make `1 - H` fall at the filter's own slope: for a
+4th-order Butterworth the numerator's leading term is `a₃s³` against `s⁴` in the
+denominator, so
+
+```
+|1 - H| ≈ a₃ · fc / f          a₃ = 2.6131
+```
+
+— **6 dB per octave whatever the order**. At a 60 Hz corner that is −16 dB at
+1 kHz and −32 dB at 6 kHz, so the delta is full of music and sounds alarming.
+
+It is phase, not amplitude. The output's magnitude response measured against its
+input over a whole side:
+
+| | 30 Hz | 60 Hz | 125 Hz | 250 Hz | 1 kHz | 6 kHz | 10 kHz |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Rumble at 60 Hz | −23.5 dB | −3.3 dB | −0.01 dB | **0.00** | **0.00** | **0.00** | **0.00** |
+
+Nothing above 125 Hz is touched. **Judge Rumble by the result, not by its
+delta**; judge the notch either way.
 
 ### What Dehum will not do
 
@@ -822,6 +963,9 @@ On **cachirulo**, which has rumble and no line, the defaults also do nothing.
 * **Detection is per channel.** On a stereo transfer where the hum is common to
   both, each channel finds it independently and they may engage a hop or two
   apart. Nothing has been measured about whether that is audible.
+* **Coherence detection stops at 80 Hz**, because above it a sustained musical
+  note is a coherent tone and scores higher than either real hum. A buried line
+  above 80 Hz has to be pinned with **Frequency**.
 * **Only tested on mono 78 rpm transfers**, like the declicker.
 
 ---
@@ -986,7 +1130,10 @@ Built against `tests/vst2_stub`, so it needs no SDK — with the caveat noted
 above about what that does not establish.
 
 **`dehum_verify`** checks the dehummer against independent references rather
-than against itself. The hand-rolled FFT is pinned by requiring tones placed on
+than against itself. The tonality ratio is pinned at both of its analytic
+extremes — 1 for a pure tone, `sqrt(narrow/wide)` for noise — which catches a
+wrong coefficient, a swapped pair or an accumulator measuring the wrong thing;
+measured 0.993 and 0.222 against 1 and 0.224. The hand-rolled FFT is pinned by requiring tones placed on
 known bin centres to be detected there to within 0.15 Hz — a transposed
 butterfly, a wrong twiddle sign or a bad real-input unpack all move the peak. The
 notch depth is checked against its *analytic* floor `bandwidth/(2·f0)` rather

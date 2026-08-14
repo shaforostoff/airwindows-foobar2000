@@ -64,8 +64,13 @@
 namespace dehum {
 
 enum {
-    kMaxLines     = 4,    //!< simultaneous fundamentals the detector may hold
+    //! Slots for candidate fundamentals. Most are never cancelled: the coherence
+    //! detector needs somewhere to park a nominee while it works out whether it
+    //! is a tone, so the pool is larger than the number of lines one would
+    //! expect to remove.
+    kMaxLines     = 8,
     kMaxHarmonics = 8,    //!< multiples cancelled per fundamental
+    kNominees     = 8,    //!< spectral peaks handed to probes each hop
 
     //! Analysis window, as a power of two picked so the bin spacing lands near
     //! kBinTargetHz whatever the sample rate. A fixed size would give 0.67 Hz
@@ -86,6 +91,74 @@ const double kBinTargetHz = 0.7;
 
 //! Half width of the local baseline the detector measures prominence against.
 const double kBaselineHz = 20.0;
+
+//! The coherence detector: a second way in, for lines the first one cannot see.
+//!
+//! Prominence fails when a line stands on a broad pedestal, because the baseline
+//! rides up with it. On one reference transfer the hum sits *at* the level of
+//! the turntable rumble around it and its duty cycle above threshold is 0.0% at
+//! every baseline geometry tried, guard-banded ones included. A magnitude
+//! spectrum cannot separate a coherent tone at level X from noise at level X;
+//! only phase can.
+//!
+//! So each candidate also gets two heterodyne integrators at the same frequency
+//! and very different bandwidths. A continuous tone drives both to the same
+//! complex amplitude; noise and separate note attacks arrive with independent
+//! phases, so the narrow one averages them away. |w_narrow|/|w_wide| is then a
+//! tonality measure that does not care how loud the surroundings are.
+//!
+//! kCohNarrowHz is 0.15 rather than the notch's own bandwidth because the
+//! integration has to be longer than a musical note: at 1 Hz the time constant
+//! is 0.16 s, shorter than a note, and a recurring note scored 0.92 - the same
+//! as a real hum. At 0.15 Hz the time constant is 1.1 s and it scores 0.41.
+//!
+//! This needs the frequency to about 0.15 Hz, far finer than the spectrum can
+//! nominate - which is why it only became possible once the frequency tracker
+//! existed. The nominee is parked on a probe, the tracker locks it, and the
+//! coherence is read at the locked frequency.
+const double kCohNarrowHz = 0.15;
+const double kCohWideHz   = 3.0;
+
+//! Coherence detection is confined below this, and that is not a tuning choice.
+//! Measured on the references: below 80 Hz both hum transfers score 0.48 and
+//! 0.57 while neither hum-free control has a single surviving coherent probe.
+//! Above it the order reverses - a sustained bass note at 123.5 Hz scores 0.62,
+//! beating both real hums - because a held musical note *is* a coherent tone and
+//! no statistic computed from the signal can say otherwise. Prominence still
+//! searches the full range; only this second route is capped.
+const double kCohCeilingHz = 80.0;
+
+//! What a probe must reach to count as a tone, and how much it may then fall
+//! back without being given up on - the same hysteresis the prominence route
+//! needs, and for the same reason. Without it the reference transfer confirmed
+//! three lines and dropped all three again.
+//!
+//! Measured with the probe pinned across the low band, which understates a
+//! tracked probe but is directly comparable between files: the hum-free controls
+//! stay between 0.07 and 0.17 everywhere from 30 to 65 Hz, while the two hum
+//! transfers reach 0.28 and 0.40. Free-running probes on the hum transfers clear
+//! 0.42; neither control ever does.
+const double kCohThreshold    = 0.42;
+const double kCohRetainMargin = 0.12;
+
+//! How long the ratio is accumulated over, and how long a probe is ignored for.
+//!
+//! This has to be long, and that was not obvious. Accumulated over a fifth of a
+//! second the ratio reads 0.9 or better for everything on real transfers,
+//! including hum-free ones - because turntable rumble is a slowly wandering
+//! narrowband process that is perfectly tone-like when you only look at it for
+//! 0.2 s. It stops looking like a tone over tens of seconds, and a hum does not.
+//! So the sums decay with this time constant rather than being reset per hop.
+//!
+//! The synthetic extremes are unaffected either way: a pure tone reads 0.999 and
+//! white noise 0.186 against an analytic sqrt(narrow/wide) = 0.224.
+const double kCohWindowSec = 20.0;
+
+//! Hops of sustained coherence before a probe becomes a line. As demanding as
+//! the prominence route: at 12 the coherence of marginal lines fluctuates across
+//! the threshold and they confirm and drop repeatedly, taking a share of the
+//! music with them each time they are engaged.
+const int kCohScoreActivate = 24;
 
 //! Evidence counter, and the part that decides what counts as hum.
 //!
@@ -153,12 +226,26 @@ struct Params {
         // instead - during calibration a bandoneon E4 at 329 Hz was detected as
         // hum in both transfers of the same piece and duly cancelled.
         p.searchTo    = 150.0f;
-        p.harmonics   = 4;
+        // 1. Harmonics are a mains-hum idea and cost music when they are not
+        //    there: a notch removes the coherent part at its frequency whether
+        //    or not that part is hum, and multiples of a low fundamental land
+        //    squarely in the musical register. Measured on the rumbly reference
+        //    with 4 harmonics of two detected lines, six notches fell between
+        //    80 and 200 Hz and took **84% of everything removed** with them,
+        //    about a tenth of the energy in that band - against 0.8 dB gained at
+        //    the line itself. Neither reference hum has harmonics worth having.
+        //    Raise this for a genuine mains buzz, where they do exist.
+        p.harmonics   = 1;
         p.frequency   = 0.0f;
-        // Off. The broadband low-frequency rumble that shares this band with hum
-        // is a different defect - see the README - and whether to filter it is a
-        // judgement about the transfer, not something to do to every file.
-        p.rumbleHz    = 0.0f;
+        // 40 Hz. Broadband low-frequency rumble is a different defect from hum -
+        // see the README - but it shares the band, it is what dominates one of
+        // the two reference transfers, and leaving this off meant the component
+        // did nothing at all to that file. 40 Hz is the cautious end of what the
+        // measurements support: about 4 dB out of the 32-45 Hz band, nothing
+        // above 90 Hz touched, and little enough below that it is safe on
+        // material that does have real bass. 60 Hz is what that transfer
+        // actually wants, and is the first thing to try if rumble survives.
+        p.rumbleHz    = 40.0f;
         p.dryWet      = 1.0f;
         return p;
     }
@@ -180,6 +267,15 @@ struct Config {
     double promDb      = 24.0;   //!< prominence a candidate needs, dB
     double halfWidth   = 1.0;    //!< notch 3 dB half width, Hz
     double lamNotch    = 0.0;    //!< one-pole coefficient, 2*pi*halfWidth/rate
+
+    //! Coherence route. cohBinHi is where nomination for it stops - see
+    //! kCohCeilingHz for why that ceiling is not negotiable.
+    double lamCohNarrow = 0.0;
+    double lamCohWide   = 0.0;
+    int    cohBinHi     = 0;
+    double cohThreshold = kCohThreshold;
+    int    cohSettle    = 0;     //!< samples before a probe's ratio is believed
+    double cohSmooth    = 0.0;   //!< per-hop smoothing of the ratio
     int    harmonics   = 4;
     double manualFreq  = 0.0;    //!< 0 = automatic
     double rumbleHz    = 0.0;    //!< 0 = off
@@ -255,6 +351,8 @@ struct LineReport {
     double detected   = 0.0;  //!< Hz, where the detector first put it
     double prominence = 0.0;  //!< dB above the local baseline of the median
     double amplitude  = 0.0;  //!< 2*|w|, the tone amplitude being subtracted
+    double coherence  = 0.0;  //!< |w_narrow| / |w_wide|
+    bool   viaCoherence = false;  //!< found by coherence rather than prominence
     int    harmonics  = 1;    //!< multiples engaged
 };
 
@@ -308,6 +406,14 @@ private:
         double wRe = 0.0, wIm = 0.0;
         double refRe = 0.0, refIm = 0.0;
         double wPeak = 0.0;      //!< decaying peak of |w|, gates the tracker
+        //! Coherence probe, fundamental only. Sums of squares rather than of
+        //! magnitudes so no per-sample sqrt is needed; the ratio of the roots is
+        //! what gets compared, and it was calibrated in that form.
+        double cnRe = 0.0, cnIm = 0.0;
+        double cwRe = 0.0, cwIm = 0.0;
+        double sumN = 0.0, sumW = 0.0;
+        double coh  = 0.0;       //!< smoothed |w_narrow| / |w_wide|
+        int    lived = 0;        //!< samples since this probe started
         int    trackAcc = 0;
         int    renorm   = 0;
         bool   live     = false;
@@ -316,20 +422,24 @@ private:
     struct Line {
         double detected = 0.0;   //!< where the detector put it
         double prom     = 0.0;
-        double score    = 0.0;   //!< evidence counter, see kScoreActivate
+        double score    = 0.0;   //!< prominence evidence, see kScoreActivate
+        double cohScore = 0.0;   //!< coherence evidence, the second route in
         bool   active   = false;
         bool   manual   = false;
+        bool   viaCoh   = false; //!< which route confirmed it, for diagnostics
         Osc    osc[kMaxHarmonics];
     };
 
     void   runDetector();
     void   detectPeaks(int bins);
+    void   updateCoherence();
     void   clearHistory();
     double scoreFor(double prominence) const;
     void   syncManual();
     void   startOsc(Osc & o, double freq);
     void   setOscFreq(Osc & o, double freq);
-    double runOsc(Osc & o, double x);
+    //! `probe` also runs the coherence pair; only the fundamental needs it.
+    double runOsc(Osc & o, double x, bool probe);
     double runLine(Line & line, double x);
     void   syncHarmonics(Line & line);
     void   designRumble();

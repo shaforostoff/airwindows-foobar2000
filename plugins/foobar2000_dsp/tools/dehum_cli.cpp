@@ -29,11 +29,17 @@ void usage() {
         "  -s <0..1>    Sensitivity (default 0.5 -> 24 dB prominence)\n"
         "  -b <Hz>      Notch half width (default 1.0)\n"
         "  -t <Hz>      Top of the automatic search range (default 150)\n"
-        "  -n <1..8>    Harmonics of each line to cancel (default 4)\n"
+        "  -n <1..8>    Harmonics of each line to cancel (default 1)\n"
         "  -f <Hz>      Pin the fundamental here; 0 = detect (default 0)\n"
-        "  -r <Hz>      Rumble high-pass corner; 0 = off (default 0)\n"
+        "  -r <Hz>      Rumble high-pass corner; 0 = off (default 40)\n"
         "  -w <0..1>    Dry/wet (default 1)\n"
-        "  --delta      Write what was removed instead of the cleaned audio\n"
+        "  --delta      Write what was removed instead of the cleaned audio.\n"
+        "               Meaningful for the notch, whose delta really is confined\n"
+        "               to the line. NOT meaningful for -r: what a minimum-phase\n"
+        "               high-pass removes is 1-H, which decays at 6 dB/octave\n"
+        "               whatever its order, so its delta carries the whole\n"
+        "               spectrum as phase shift while the output's magnitude\n"
+        "               above the corner is untouched. See the README.\n"
         "  --quiet\n"
         "\n"
         "  Calibration only, not exposed in the component:\n"
@@ -150,9 +156,11 @@ int main(int argc, char ** argv) {
                    chans[c]->confirmations(), chans[c]->dropouts());
             for (int i = 0; i < n; ++i) {
                 printf("    %8.3f Hz (detected %8.3f, prominence %5.1f dB, "
-                       "amplitude %.6f = %.1f dBFS, %d harmonic%s)\n",
+                       "coherence %.3f, via %s, amplitude %.1f dBFS, "
+                       "%d harmonic%s)\n",
                        rep[i].frequency, rep[i].detected, rep[i].prominence,
-                       rep[i].amplitude,
+                       rep[i].coherence,
+                       rep[i].viaCoherence ? "coherence" : "prominence",
                        20.0 * log10(rep[i].amplitude + 1e-30),
                        rep[i].harmonics, rep[i].harmonics == 1 ? "" : "s");
             }
