@@ -1,0 +1,4 @@
+# Release artefacts, written by foobar2000_dsp\scripts\build_release.ps1
+# (.fb2k-component archives) and build_winvst.ps1 (winvst\*.dll). One level up
+# from foobar2000_dsp because the VST2 DLLs are not foobar2000 components.
+/dist/

@@ -23,11 +23,17 @@
  *    - hostile input, sample rate changes, dry/wet bypass, resume(), and the
  *      preset chunk.
  *
- *  Built against tests/vst2_stub, not Steinberg's SDK, which is not in this
- *  repository. Read the header comment there for what that does and does not
- *  establish - in particular, this test cannot tell you the plug-in compiles
- *  in the real VSTProject, and the stub's parameter formatter is not the
- *  SDK's, so displays are parsed for their value rather than string-compared.
+ *  Built against plugins/WinVST/vst2_shim - the same clean-room VST2 shim the
+ *  shipped DLL is built against, not Steinberg's SDK, which is not in this
+ *  repository. Read that folder's README for what it does and does not
+ *  establish. Two things this file in particular cannot tell you: that the
+ *  plug-in compiles against the real SDK, and anything about the ABI, because
+ *  the plug-in is linked in here rather than loaded.
+ *  tests/winvst_host_verify.cpp is the other half - it loads the finished DLL
+ *  through LoadLibrary and talks to it over the C ABI alone.
+ *
+ *  The shim's parameter formatter is not the SDK's, so displays are parsed for
+ *  their value rather than string-compared.
  *
  *  Mirror identity - that WinVST/Declick/declick_core.cpp is byte-identical
  *  to the canonical one - is not checked here. That is scripts/sync_cores.ps1,
@@ -46,6 +52,20 @@
 namespace {
 
 int g_failures = 0;
+int g_ioChanged = 0;
+
+/*  A stand-in host. The shim has no observation hooks of its own - it is the
+ *  shim that ships, not a test double - so the only way to see what the plug-in
+ *  told the host is to be the host. audioMasterIOChanged is the one callback
+ *  anything in this tree ever makes, and for this plug-in it must happen when
+ *  Max repair or Model order moves and at no other time. */
+VstIntPtr VSTCALLBACK hostCallback(AEffect * effect, VstInt32 opcode, VstInt32 index,
+                                   VstIntPtr value, void * ptr, float opt) {
+    (void)effect; (void)index; (void)value; (void)ptr; (void)opt;
+    if (opcode == audioMasterIOChanged) { ++g_ioChanged; return 1; }
+    if (opcode == audioMasterVersion) return 2400;
+    return 0;
+}
 
 void check(bool ok, const char * what, const char * detail = "") {
     printf("  %-52s %-4s %s\n", what, ok ? "ok" : "FAIL", detail);
@@ -151,10 +171,10 @@ void testAgainstCore(const std::vector<double> & inL, const std::vector<double> 
         }
     }
 
-    Declick fx(NULL);
+    Declick fx(hostCallback);
     char d[96];
-    snprintf(d, sizeof d, "%d samples", (int)fx.initialDelay);
-    check(fx.initialDelay == cfg.latency, "latency is declared before any audio flows", d);
+    snprintf(d, sizeof d, "%d samples", (int)fx.getAeffect()->initialDelay);
+    check(fx.getAeffect()->initialDelay == cfg.latency, "latency is declared before any audio flows", d);
     check(fx.getGetTailSize() == cfg.latency, "getGetTailSize matches the declared delay");
 
     runBlocks(fx, inL, inR, outL, outR, oneBlockSize(512));
@@ -172,7 +192,7 @@ void testBlockSizes(const std::vector<double> & inL, const std::vector<double> &
     };
     for (int p = 0; p < 5; ++p) {
         const std::vector<int> bs(patterns[p], patterns[p] + 4);
-        Declick fx(NULL);
+        Declick fx(hostCallback);
         std::vector<double> aL, aR;
         runBlocks(fx, inL, inR, aL, aR, bs);
         const double w = fmax(worstDiff(aL, refL), worstDiff(aR, refR));
@@ -195,7 +215,7 @@ void testLatency(const std::vector<double> & refL, const declick::Config & cfg) 
     std::vector<double> clL, clR, aL, aR;
     std::vector<int> none;
     makeSignal(clL, clR, none, kFrames, false);
-    Declick fx(NULL);
+    Declick fx(hostCallback);
     runBlocks(fx, clL, clR, aL, aR, oneBlockSize(512));
     double err = 0.0, ref = 0.0;
     for (int i = cfg.latency; i < kFrames; ++i) {
@@ -225,7 +245,7 @@ void testRepair(const std::vector<double> & inL, const std::vector<double> & inR
     for (int c = 0; c < 2; ++c) {
         std::vector<double> aL, aR;
         const std::vector<double> * use = &refL;
-        Declick fx(NULL);
+        Declick fx(hostCallback);
         if (cases[c].depth >= 0.0f) {
             fx.setParameter(kParamD, cases[c].depth);
             runBlocks(fx, inL, inR, aL, aR, oneBlockSize(512));
@@ -247,11 +267,11 @@ void testRepair(const std::vector<double> & inL, const std::vector<double> & inR
 
 //! Live moves retune; structural ones rebuild and say so.
 void testParameterMoves(const std::vector<double> & inL, const std::vector<double> & inR) {
-    Declick fx(NULL);
+    Declick fx(hostCallback);
     std::vector<double> aL, aR;
     const std::vector<int> bs = oneBlockSize(512);
     runBlocks(fx, inL, inR, aL, aR, bs);
-    const int baseline = fx.ioChangedCount;
+    const int baseline = g_ioChanged;
 
     fx.setParameter(kParamA, 0.85f);            // Sensitivity: retune
     runBlocks(fx, inL, inR, aL, aR, bs);
@@ -259,7 +279,7 @@ void testParameterMoves(const std::vector<double> & inL, const std::vector<doubl
     for (size_t i = 0; i < aL.size(); ++i) {
         if (aL[i] == 0.0) { if (++run > worstRun) worstRun = run; } else run = 0;
     }
-    check(fx.ioChangedCount == baseline, "a Sensitivity move does not renegotiate latency");
+    check(g_ioChanged == baseline, "a Sensitivity move does not renegotiate latency");
     char d[64]; snprintf(d, sizeof d, "longest silent run %d samples", worstRun);
     check(worstRun < 64, "a Sensitivity move leaves no gap in the audio", d);
 
@@ -269,10 +289,10 @@ void testParameterMoves(const std::vector<double> & inL, const std::vector<doubl
     p64.sensitivity = 0.85f;
     p64.order = 64;
     declick::Config c64; c64.compute(p64, (double)kRate);
-    snprintf(d, sizeof d, "%d -> %d samples", (int)c64.pad, (int)fx.initialDelay);
-    check(fx.ioChangedCount > baseline, "a Model order move renegotiates latency");
-    check(fx.initialDelay == c64.latency, "the rebuilt latency is the one order 64 needs", d);
-    check(fx.getGetTailSize() == fx.initialDelay,
+    snprintf(d, sizeof d, "%d -> %d samples", (int)c64.pad, (int)fx.getAeffect()->initialDelay);
+    check(g_ioChanged > baseline, "a Model order move renegotiates latency");
+    check(fx.getAeffect()->initialDelay == c64.latency, "the rebuilt latency is the one order 64 needs", d);
+    check(fx.getGetTailSize() == fx.getAeffect()->initialDelay,
           "declared delay and tail stay consistent after a rebuild");
 }
 
@@ -280,12 +300,12 @@ void testParameterMoves(const std::vector<double> & inL, const std::vector<doubl
 void testRobustness(const std::vector<double> & inL, const std::vector<double> & inR,
                     const std::vector<double> & refL, const declick::Config & cfg) {
     {
-        Declick fx(NULL);
-        fx.sampleRate = 96000.0f;
+        Declick fx(hostCallback);
+        fx.setSampleRate(96000.0f);
         std::vector<double> aL, aR;
         runBlocks(fx, inL, inR, aL, aR, oneBlockSize(256));
         declick::Config c96; c96.compute(declick::Params::defaults(), 96000.0);
-        check(fx.initialDelay == c96.latency, "a sample rate change re-derives the latency");
+        check(fx.getAeffect()->initialDelay == c96.latency, "a sample rate change re-derives the latency");
         bool finite = true;
         for (size_t i = 0; i < aL.size(); ++i) {
             if (!(fabs(aL[i]) < 1e30) || !(fabs(aR[i]) < 1e30)) finite = false;
@@ -293,7 +313,7 @@ void testRobustness(const std::vector<double> & inL, const std::vector<double> &
         check(finite, "output stays finite at 96 kHz");
     }
     {
-        Declick fx(NULL);
+        Declick fx(hostCallback);
         std::vector<double> bad((size_t)4096, 0.0);
         for (size_t i = 0; i < bad.size(); ++i) {
             switch (i % 5) {
@@ -317,7 +337,7 @@ void testRobustness(const std::vector<double> & inL, const std::vector<double> &
         check(energy > 1.0, "the stream recovers after hostile input");
     }
     {
-        Declick fx(NULL);
+        Declick fx(hostCallback);
         fx.setParameter(kParamG, 0.0f);         // Dry/Wet 0
         std::vector<double> aL, aR;
         runBlocks(fx, inL, inR, aL, aR, oneBlockSize(512));
@@ -342,11 +362,11 @@ void testRobustness(const std::vector<double> & inL, const std::vector<double> &
             qL[(size_t)i] = (double)fl[(size_t)i];
             qR[(size_t)i] = (double)fr[(size_t)i];
         }
-        Declick dbl(NULL);
+        Declick dbl(hostCallback);
         std::vector<double> dL, dR;
         runBlocks(dbl, qL, qR, dL, dR, oneBlockSize(512));
 
-        Declick flt(NULL);
+        Declick flt(hostCallback);
         int pos = 0;
         while (pos < kFrames) {
             const int want = (kFrames - pos < 512) ? (kFrames - pos) : 512;
@@ -367,7 +387,7 @@ void testRobustness(const std::vector<double> & inL, const std::vector<double> &
         check(w <= 2.0 * ulp, "the float path is the double path plus dither", d);
     }
     {
-        Declick fx(NULL);
+        Declick fx(hostCallback);
         std::vector<double> aL, aR;
         runBlocks(fx, inL, inR, aL, aR, oneBlockSize(512));
         fx.resume();
@@ -386,7 +406,7 @@ void testRobustness(const std::vector<double> & inL, const std::vector<double> &
 //! Parsed rather than string-compared: the stub's formatter is not the SDK's,
 //! and it is the value that is being asserted.
 void testParameterMapping() {
-    Declick fx(NULL);
+    Declick fx(hostCallback);
     char t[64];
     struct Case { int index; float set; double want; const char * what; };
     static const Case cases[] = {
@@ -412,7 +432,7 @@ void testParameterMapping() {
 
 //! Presets: a chunk has to carry every parameter, in the right slot.
 void testChunk() {
-    Declick a(NULL), b(NULL);
+    Declick a(hostCallback), b(hostCallback);
     // Distinct values, so a parameter read out of position cannot pass.
     const float vals[kNumParameters] = { 0.11f, 0.22f, 0.33f, 0.44f, 0.55f, 0.66f, 0.77f };
     for (int i = 0; i < kNumParameters; ++i) a.setParameter(i, vals[i]);
@@ -430,7 +450,7 @@ void testChunk() {
     free(blob);
 
     // Out-of-range values in a stored preset must be pinned, not trusted.
-    Declick c(NULL);
+    Declick c(hostCallback);
     float wild[kNumParameters] = { -3.0f, 4.0f, -0.5f, 2.0f, -1.0f, 9.0f, -9.0f };
     c.setChunk(wild, (VstInt32)sizeof wild, true);
     bool pinned = true;

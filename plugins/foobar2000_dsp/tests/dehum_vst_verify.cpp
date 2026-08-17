@@ -25,11 +25,17 @@
  *    - the slider mappings, the off positions on Freq and Rumble, hostile
  *      input, dry/wet bypass and the preset chunk.
  *
- *  Built against tests/vst2_stub, not Steinberg's SDK, which is not in this
- *  repository. Read the header comment there for what that does and does not
- *  establish - in particular, this test cannot tell you the plug-in compiles in
- *  the real VSTProject, and the stub's parameter formatter is not the SDK's, so
- *  displays are parsed for their value rather than string-compared.
+ *  Built against plugins/WinVST/vst2_shim - the same clean-room VST2 shim the
+ *  shipped DLL is built against, not Steinberg's SDK, which is not in this
+ *  repository. Read that folder's README for what it does and does not
+ *  establish. Two things this file in particular cannot tell you: that the
+ *  plug-in compiles against the real SDK, and anything about the ABI, because
+ *  the plug-in is linked in here rather than loaded. tests/winvst_host_verify.cpp
+ *  is the other half - it loads the finished DLL through LoadLibrary and talks
+ *  to it over the C ABI alone.
+ *
+ *  The shim's parameter formatter is not the SDK's, so displays are parsed for
+ *  their value rather than string-compared.
  *
  *  Mirror identity - that WinVST/Dehum/dehum_core.cpp is byte-identical to the
  *  canonical one - is not checked here. That is scripts/sync_cores.ps1, which
@@ -48,6 +54,20 @@
 namespace {
 
 int g_failures = 0;
+int g_ioChanged = 0;
+
+/*  A stand-in host. The shim has no observation hooks of its own - it is the
+ *  shim that ships, not a test double - so the only way to see what the plug-in
+ *  told the host is to be the host. audioMasterIOChanged is the one callback
+ *  anything in this tree ever makes, and for this plug-in the correct number of
+ *  times is zero. */
+VstIntPtr VSTCALLBACK hostCallback(AEffect * effect, VstInt32 opcode, VstInt32 index,
+                                   VstIntPtr value, void * ptr, float opt) {
+    (void)effect; (void)index; (void)value; (void)ptr; (void)opt;
+    if (opcode == audioMasterIOChanged) { ++g_ioChanged; return 1; }
+    if (opcode == audioMasterVersion) return 2400;
+    return 0;
+}
 
 void check(bool ok, const char * what, const char * detail = "") {
     printf("  %-56s %-4s %s\n", what, ok ? "ok" : "FAIL", detail);
@@ -141,13 +161,14 @@ double toneAmplitude(const std::vector<double> & v, double f) {
 //! The one that matters: the wrapper must add no DSP.
 void testAgainstCore(const std::vector<double> & inL, const std::vector<double> & inR) {
     printf("\nagainst the core, driven directly\n");
-    Dehum fx(NULL);
-    fx.sampleRate = (float)kRate;
+    Dehum fx(hostCallback);
+    fx.setSampleRate((float)kRate);
+    g_ioChanged = 0;
     std::vector<double> vL, vR;
     runPlugin(fx, inL, inR, vL, vR, 512);
 
-    check(fx.initialDelay == 0, "latency is declared as zero");
-    check(fx.ioChangedCount == 0, "the host is never asked to renegotiate it");
+    check(fx.getAeffect()->initialDelay == 0, "latency is declared as zero");
+    check(g_ioChanged == 0, "the host is never asked to renegotiate it");
 
     dehum::Params p = dehum::Params::defaults();
     dehum::Config cfg;
@@ -172,14 +193,14 @@ void testBlockSizes(const std::vector<double> & inL, const std::vector<double> &
     printf("\nblock sizes (the wrapper chunks through a fixed scratch)\n");
     std::vector<double> refL, refR;
     {
-        Dehum fx(NULL);
-        fx.sampleRate = (float)kRate;
+        Dehum fx(hostCallback);
+        fx.setSampleRate((float)kRate);
         runPlugin(fx, inL, inR, refL, refR, 1);
     }
     const int blocks[5] = { 64, 512, 1024, 1025, 4096 };
     for (int k = 0; k < 5; ++k) {
-        Dehum fx(NULL);
-        fx.sampleRate = (float)kRate;
+        Dehum fx(hostCallback);
+        fx.setSampleRate((float)kRate);
         std::vector<double> vL, vR;
         runPlugin(fx, inL, inR, vL, vR, blocks[k]);
         const double w = worstDiff(vL, refL) + worstDiff(vR, refR);
@@ -195,8 +216,8 @@ void testBlockSizes(const std::vector<double> & inL, const std::vector<double> &
 void testRemovesHum(const std::vector<double> & inL, const std::vector<double> & inR,
                     double humHz) {
     printf("\nit actually removes the hum\n");
-    Dehum fx(NULL);
-    fx.sampleRate = (float)kRate;
+    Dehum fx(hostCallback);
+    fx.setSampleRate((float)kRate);
     std::vector<double> vL, vR;
     runPlugin(fx, inL, inR, vL, vR, 512);
     const double before = toneAmplitude(inL, humHz);
@@ -214,8 +235,8 @@ void testRemovesHum(const std::vector<double> & inL, const std::vector<double> &
 void testParameterMovesRetune(const std::vector<double> & inL,
                               const std::vector<double> & inR) {
     printf("\nevery parameter retunes live\n");
-    Dehum fx(NULL);
-    fx.sampleRate = (float)kRate;
+    Dehum fx(hostCallback);
+    fx.setSampleRate((float)kRate);
     std::vector<double> vL, vR;
     runPlugin(fx, inL, inR, vL, vR, 512);
 
@@ -224,7 +245,7 @@ void testParameterMovesRetune(const std::vector<double> & inL,
     const char * names[kNumParameters] =
         { "Sensitv", "Bandwid", "SrchTo", "Harmncs", "Freq", "Rumble", "Dry/Wet" };
     for (int k = 0; k < kNumParameters; ++k) {
-        const int before = fx.ioChangedCount;
+        const int before = g_ioChanged;
         const float was = fx.getParameter(k);
         fx.setParameter(k, was > 0.5f ? 0.25f : 0.75f);
         std::vector<double> bl(512, 0.0), br(512, 0.0);
@@ -242,7 +263,7 @@ void testParameterMovesRetune(const std::vector<double> & inL,
         char what[112], d[64];
         snprintf(what, sizeof(what), "%-8s moves without renegotiating latency", names[k]);
         snprintf(d, sizeof(d), "longest silent run %d", worst);
-        check(fx.ioChangedCount == before && worst < 32, what, d);
+        check(g_ioChanged == before && worst < 32, what, d);
         fx.setParameter(k, was);
     }
 }
@@ -250,8 +271,9 @@ void testParameterMovesRetune(const std::vector<double> & inL,
 void testRobustness(const std::vector<double> & inL, const std::vector<double> & inR) {
     printf("\nrobustness\n");
     {
-        Dehum fx(NULL);
-        fx.sampleRate = 96000.0f;
+        Dehum fx(hostCallback);
+        fx.setSampleRate(96000.0f);
+        g_ioChanged = 0;
         std::vector<double> vL, vR;
         runPlugin(fx, inL, inR, vL, vR, 512);
         bool finite = true;
@@ -259,12 +281,12 @@ void testRobustness(const std::vector<double> & inL, const std::vector<double> &
             if (!(vL[i] > -1e30 && vL[i] < 1e30)) { finite = false; break; }
         }
         check(finite, "output stays finite at 96 kHz");
-        check(fx.initialDelay == 0, "latency is still zero at 96 kHz");
-        check(fx.ioChangedCount == 0, "a sample rate change renegotiates nothing");
+        check(fx.getAeffect()->initialDelay == 0, "latency is still zero at 96 kHz");
+        check(g_ioChanged == 0, "a sample rate change renegotiates nothing");
     }
     {
-        Dehum fx(NULL);
-        fx.sampleRate = (float)kRate;
+        Dehum fx(hostCallback);
+        fx.setSampleRate((float)kRate);
         std::vector<double> bl(2048, 0.0), br(2048, 0.0);
         for (int i = 0; i < 2048; ++i) {
             bl[(size_t)i] = 0.1 * sin(2.0 * kPi * 50.0 * (double)i / kRate);
@@ -296,8 +318,8 @@ void testRobustness(const std::vector<double> & inL, const std::vector<double> &
 
 void testBypass(const std::vector<double> & inL, const std::vector<double> & inR) {
     printf("\ndry/wet 0\n");
-    Dehum fx(NULL);
-    fx.sampleRate = (float)kRate;
+    Dehum fx(hostCallback);
+    fx.setSampleRate((float)kRate);
     fx.setParameter(kParamG, 0.0f);
     fx.setParameter(kParamF, 0.0f);   //Rumble off too: a high-pass is not a bypass
     std::vector<double> vL, vR;
@@ -313,12 +335,12 @@ void testFloatPathIsDoublePlusDither(const std::vector<double> & inL,
     printf("\nthe float path\n");
     std::vector<double> dL, dR;
     {
-        Dehum fx(NULL);
-        fx.sampleRate = (float)kRate;
+        Dehum fx(hostCallback);
+        fx.setSampleRate((float)kRate);
         runPlugin(fx, inL, inR, dL, dR, 512);
     }
-    Dehum fx(NULL);
-    fx.sampleRate = (float)kRate;
+    Dehum fx(hostCallback);
+    fx.setSampleRate((float)kRate);
     std::vector<float> fl(512), fr(512);
     double worst = 0.0;
     size_t pos = 0;
@@ -345,8 +367,8 @@ void testFloatPathIsDoublePlusDither(const std::vector<double> & inL,
 void testResumeKeepsLines(const std::vector<double> & inL,
                           const std::vector<double> & inR, double humHz) {
     printf("\nresume()\n");
-    Dehum fx(NULL);
-    fx.sampleRate = (float)kRate;
+    Dehum fx(hostCallback);
+    fx.setSampleRate((float)kRate);
     std::vector<double> vL, vR;
     runPlugin(fx, inL, inR, vL, vR, 512);
 
@@ -376,7 +398,7 @@ void testResumeKeepsLines(const std::vector<double> & inL,
 //! or the two ports ship different tunings while looking identical.
 void testParameterMapping() {
     printf("\nslider mappings\n");
-    Dehum fx(NULL);
+    Dehum fx(hostCallback);
     const dehum::Params want = dehum::Params::defaults();
 
     char text[64];
@@ -413,7 +435,7 @@ void testParameterMapping() {
 
 void testChunk() {
     printf("\npreset chunk\n");
-    Dehum fx(NULL);
+    Dehum fx(hostCallback);
     const float set[kNumParameters] = { 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f };
     for (int i = 0; i < kNumParameters; ++i) fx.setParameter(i, set[i]);
 
@@ -422,7 +444,7 @@ void testChunk() {
     check(size == (VstInt32)(kNumParameters * sizeof(float)),
           "the chunk is one float per parameter");
 
-    Dehum other(NULL);
+    Dehum other(hostCallback);
     other.setChunk(data, size, true);
     bool same = true;
     for (int i = 0; i < kNumParameters; ++i) {
@@ -432,7 +454,7 @@ void testChunk() {
     free(data);
 
     float wild[kNumParameters] = { -5.0f, 5.0f, -0.1f, 1.1f, 0.5f, 2.0f, -2.0f };
-    Dehum third(NULL);
+    Dehum third(hostCallback);
     third.setChunk(wild, (VstInt32)sizeof(wild), true);
     bool pinned = true;
     for (int i = 0; i < kNumParameters; ++i) {

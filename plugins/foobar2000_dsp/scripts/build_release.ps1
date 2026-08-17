@@ -82,8 +82,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$root    = Split-Path -Parent $PSScriptRoot
-$distDir = Join-Path $root 'dist'
+$root    = Split-Path -Parent $PSScriptRoot        # plugins/foobar2000_dsp
+$plugins = Split-Path -Parent $root               # plugins
+# One level above this project, because it is shared: scripts\build_winvst.ps1
+# puts the VST2 DLLs in dist\winvst, and those are not foobar2000 components.
+$distDir = Join-Path $plugins 'dist'
 $stage   = Join-Path $root 'build\_package'
 $symbols = Join-Path $root 'build\_symbols'
 

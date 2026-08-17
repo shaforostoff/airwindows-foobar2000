@@ -8,14 +8,18 @@
 #   declick_rt_verify  - counts heap allocations on the processing path and
 #                        requires zero. No SDK.
 #   declick_vst_verify - the WinVST port of the declicker vs. the core it
-#                        shares with this one. Built against tests/vst2_stub,
-#                        not Steinberg's SDK. No SDK.
+#                        shares with this one. Built against
+#                        plugins/WinVST/vst2_shim, not Steinberg's SDK. No SDK.
 #   dehum_verify       - the dehummer's FFT, notch, frequency tracker and
 #                        detector against independent references. No SDK.
 #   dehum_rt_verify    - same allocation count for the dehummer, whose detector
 #                        runs on the audio thread. No SDK.
 #   dehum_vst_verify   - the WinVST port of the dehummer vs. the core it shares.
 #                        No SDK.
+#   winvst_host_verify - NOT a target here. It loads a finished VST2 DLL through
+#                        LoadLibrary and the C ABI, so it needs a built DLL to
+#                        point at; scripts\build_winvst.ps1 compiles and runs it
+#                        against each one it produces.
 #   preset_roundtrip   - every parameter survives save/load. Links the SDK, so
 #                        it needs foobar2000's shared.dll; skips if absent.
 #   component_smoke    - loads the built DLL through foobar2000's own service
@@ -128,25 +132,31 @@ set_target_properties(dehum_rt_verify PROPERTIES FOLDER "tests")
 # to the canonical one is a different question, and the answer is
 # scripts/sync_cores.ps1 -Check, which build_release.ps1 runs first.
 #
-# vst2_stub must come first on the include path: that is where the
-# "audioeffectx.h" the plug-in asks for is found. Steinberg's real one is not in
-# this repository, so this test cannot establish that the plug-in compiles in
-# the real VSTProject - only that the DSP, the latency contract, the parameter
-# mapping and the preset chunk behave. See tests/vst2_stub/audioeffectx.h.
+# vst2_shim must come first on the include path: that is where the
+# "audioeffectx.h" the plug-in asks for is found. It is a clean-room
+# reimplementation of the VST2 ABI - Steinberg's is not in this repository - and
+# it is the same one scripts/build_winvst.ps1 links into the shipped DLL, so what
+# is compiled here is what ships. Two things it cannot establish: that the
+# plug-in compiles against the real SDK, and anything about the ABI itself, since
+# this test links the plug-in rather than loading it. The second gap is what
+# winvst_host_verify.cpp closes; see plugins/WinVST/vst2_shim/README.md.
 
+set(WINVST_SHIM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../WinVST/vst2_shim")
 set(WINVST_DECLICK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../WinVST/Declick")
 
 if(EXISTS "${WINVST_DECLICK_DIR}/Declick.cpp")
     add_executable(declick_vst_verify
         declick_vst_verify.cpp
-        vst2_stub/audioeffectx.h
+        "${WINVST_SHIM_DIR}/vst2_abi.h"
+        "${WINVST_SHIM_DIR}/audioeffectx.h"
+        "${WINVST_SHIM_DIR}/audioeffectx.cpp"
         "${WINVST_DECLICK_DIR}/Declick.cpp"
         "${WINVST_DECLICK_DIR}/DeclickProc.cpp"
         "${WINVST_DECLICK_DIR}/declick_core.cpp"
     )
 
     target_include_directories(declick_vst_verify PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vst2_stub"
+        "${WINVST_SHIM_DIR}"
         "${WINVST_DECLICK_DIR}")
 
     if(MSVC)
@@ -178,14 +188,14 @@ set(WINVST_DEHUM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../WinVST/Dehum")
 if(EXISTS "${WINVST_DEHUM_DIR}/Dehum.cpp")
     add_executable(dehum_vst_verify
         dehum_vst_verify.cpp
-        vst2_stub/audioeffectx.h
+        "${WINVST_SHIM_DIR}/audioeffectx.cpp"
         "${WINVST_DEHUM_DIR}/Dehum.cpp"
         "${WINVST_DEHUM_DIR}/DehumProc.cpp"
         "${WINVST_DEHUM_DIR}/dehum_core.cpp"
     )
 
     target_include_directories(dehum_vst_verify PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vst2_stub"
+        "${WINVST_SHIM_DIR}"
         "${WINVST_DEHUM_DIR}")
 
     if(MSVC)

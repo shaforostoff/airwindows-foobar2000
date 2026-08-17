@@ -52,7 +52,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1
 ```
 
 That configures and builds x86 and x64 in Release, runs the test suites, and
-writes to `dist/`:
+writes to `..\dist\` (one level up, because it is shared with the VST2 builds
+below, and a `.dll` for a DAW is not a foobar2000 component):
 
 | File | What it is |
 | --- | --- |
@@ -130,7 +131,7 @@ define.
 #### Checking a binary on its own
 
 ```powershell
-.\scripts\check_win7.ps1 dist\foo_dsp_declick-1.0.0.fb2k-component
+.\scripts\check_win7.ps1 ..\dist\foo_dsp_declick-1.0.0.fb2k-component
 ```
 
 Takes DLLs, directories or `.fb2k-component` archives, and reports anything
@@ -1126,8 +1127,10 @@ retunes without renegotiating latency or leaving a gap while a Model order move
 does the opposite; dry/wet 0 as a bit-exact bypass; `resume()` starting from
 silence rather than the previous take; hostile input; the slider-to-core
 mappings; and the preset chunk, including pinning out-of-range stored values.
-Built against `tests/vst2_stub`, so it needs no SDK — with the caveat noted
-above about what that does not establish.
+Built against `plugins/WinVST/vst2_shim`, so it needs no SDK — the same shim the
+shipped DLL links, with the caveat noted above about what that does not
+establish. What it cannot see at all is the ABI, because the plug-in is linked
+in here rather than loaded; that is `winvst_host_verify`'s job.
 
 **`dehum_verify`** checks the dehummer against independent references rather
 than against itself. The tonality ratio is pinned at both of its analytic
@@ -1273,12 +1276,24 @@ tests/
   dehum_verify.cpp                FFT, notch, tracker and detector vs. references
   dehum_rt_verify.cpp             ditto for the dehummer's audio thread
   dehum_vst_verify.cpp            the WinVST dehummer vs. the core it shares
-  vst2_stub/audioeffectx.h        our own minimal VST 2.4 declarations, so the above
-                                  builds without Steinberg's SDK
+  winvst_host_verify.cpp          loads a finished VST2 DLL over the C ABI alone
   preset_roundtrip.cpp            parameters survive save/load, both components
   component_smoke.cpp             loads a DLL through the real SDK plumbing
 external/                         the downloaded SDK (git-ignored)
-dist/                             release artefacts (git-ignored)
+../dist/                          release artefacts, shared with the VST2 builds
+                                  (git-ignored)
+```
+
+The VST2 shim the two `*_vst_verify` tests and the shipped DLLs all build
+against lives with the plug-ins it serves, not here:
+
+```
+../WinVST/vst2_shim/
+  vst2_abi.h                      AEffect, the opcode enums, and the static_asserts
+                                  that pin every offset
+  audioeffectx.h                  AudioEffect / AudioEffectX
+  audioeffectx.cpp                the opcode dispatcher and the C thunks
+  vstplugmain.cpp                 VSTPluginMain, the one exported symbol
 ```
 
 `decrackle_core.{h,cpp}` deliberately knows nothing about foobar2000, VST or
@@ -1356,12 +1371,86 @@ directly with the same `Config`, and require each VST's 64-bit output to match t
 the bit. Both report **0.000e+00**. They run on every build, on both
 architectures, and need no SDK. See [Verification](#verification).
 
-Steinberg's `vst2.x` sources are not redistributable and are not here, so the
-VST itself cannot be built from a clean checkout — see
-`plugins/AirwindowsWinVSTTemplate.txt`. `tests/vst2_stub/audioeffectx.h` stands
-in for the parts of the API the Airwindows pattern touches, which is enough to
-run the DSP but **not** enough to prove the plug-in compiles in the real
-VSTProject. That still takes a build there.
+Those two link the plug-in into the test binary, which is why they can compare
+bit for bit — and also why they cannot see the ABI at all.
+**`winvst_host_verify`** is the other half: it does what a host does and nothing
+else — `LoadLibrary`, `GetProcAddress("VSTPluginMain")`, read the `AEffect`,
+`dispatcher(opcode)`, `processDoubleReplacing`, `effClose` — and never touches
+the plug-in's C++ classes through that path. It also links the same plug-in
+statically, drives that copy through the identical opening sequence, and requires
+the two streams to be equal to the bit. Both copies are the same source compiled
+the same way, so any difference between them *is* the ABI, the dispatcher, the
+thunks or the calling convention: the four things nothing else here can see.
+
+`build_winvst.ps1` runs it against each DLL it produces. All four pass, worst
+deviation **0.000e+00**. Along the way it checks the things a host would notice
+and a compiler would not:
+
+| | |
+| --- | --- |
+| `sizeof(AEffect)` | 144 on x86, 192 on x64, read out of the loaded module |
+| flags | exactly `canReplacing \| programChunks \| canDoubleReplacing`, no editor |
+| `uniqueID` | `0x64636C6B` `'dclk'`, `0x6468756D` `'dhum'` |
+| `resvd1`, `resvd2`, `future[56]` | left zeroed, as the host expects |
+| the deprecated `process` | a no-op function, not a null pointer, because a host old enough to call it will not check first |
+| opcode routing | all seven parameter names arrive at the right index; displays and labels stay inside `kVstMaxParamStrLen` in a buffer bigger than promised |
+| the latency contract | Declick declares 784 samples with `effGetTailSize` matching, and calls `audioMasterIOChanged` twice for the two structural parameters; Dehum declares 0 and calls it **never** |
+| `main` | aliased to the same address as `VSTPluginMain` |
+| `effClose` | 24 open/close cycles do not accumulate private bytes. This is a contract, not a nicety: the host frees nothing, so a shim that forgets the `delete` leaks the whole instance on every plug-in scan, and Dehum carries ~2 MB of analysis state per channel |
+
+### Building the VST2 plug-ins
+
+```powershell
+.\scripts\build_winvst.ps1
+```
+
+Both plug-ins, both architectures, into `..\dist\winvst\`:
+
+| File | For |
+| --- | --- |
+| `Declick32.dll`, `Dehum32.dll` | 32-bit hosts |
+| `Declick64.dll`, `Dehum64.dll` | 64-bit hosts |
+
+A VST2 host identifies a plug-in by its `uniqueID` rather than its filename, so
+both architectures can live in the same VST folder. Install by copying.
+
+Steinberg's `vst2.x` sources are not redistributable and are not here —
+`plugins/AirwindowsWinVSTTemplate.txt` says so and adds "so you're on your own".
+That left `plugins/WinVST` as source nobody could build without a copy of a
+discontinued SDK, so **`plugins/WinVST/vst2_shim`** is a clean-room
+implementation of the VST2 ABI: the `AEffect` structure, the opcode dispatcher
+and `VSTPluginMain`, written from the published description of the interface and
+MIT licensed with the rest of the tree. JUCE, Ardour and LMMS all arrived at the
+same place. There is no editor, no MIDI, no offline processing and no speaker
+arrangements; those opcodes answer "not supported", which is what the stock
+Airwindows plug-ins answered by not overriding them.
+
+The build does not go through each plug-in's `VSTProject.vcxproj`. Those ask for
+toolset v140 and Windows SDK 8.1 and expect the SDK at a path outside this tree,
+so `build_winvst.ps1` drives `cl.exe` directly and the `.vcxproj`, `.sln` and
+`.def` files are left exactly as Airwindows ships them — the documented "drag the
+folder into VSTProject and press build" route still works for anyone who does
+have the real SDK.
+
+#### The part to be suspicious of
+
+An ABI is not an interface you get to design. Every byte offset in `AEffect` and
+every opcode number was fixed in 1999 by hosts that are still in use, and
+getting one wrong does not fail to compile — it loads, and then a host reads a
+function pointer out of the middle of an integer field and jumps to it. Three
+things push back:
+
+* **Every field offset is `static_assert`ed**, along with `sizeof(AEffect)` — 144
+  bytes on 32-bit, 192 on 64-bit. Those two numbers are the one thing an outsider
+  can check the shim against without reading it.
+* **The opcode enums keep their deprecated entries.** `effGetVu` is unused and
+  deleting it would silently move the ten opcodes after it. The values the
+  plug-ins depend on are additionally asserted as literals.
+* **`winvst_host_verify` loads the finished DLL** — see below.
+
+What none of that proves is that 144 and 192 and `effGetChunk == 23` are
+themselves right, because the shim and its test read the same header and so agree
+by construction. Only a real host settles that.
 
 ---
 
