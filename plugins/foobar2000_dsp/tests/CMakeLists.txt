@@ -14,6 +14,8 @@
 #                        detector against independent references. No SDK.
 #   dehum_rt_verify    - same allocation count for the dehummer, whose detector
 #                        runs on the audio thread. No SDK.
+#   dehum_vst_verify   - the WinVST port of the dehummer vs. the core it shares.
+#                        No SDK.
 #   preset_roundtrip   - every parameter survives save/load. Links the SDK, so
 #                        it needs foobar2000's shared.dll; skips if absent.
 #   component_smoke    - loads the built DLL through foobar2000's own service
@@ -163,6 +165,45 @@ if(EXISTS "${WINVST_DECLICK_DIR}/Declick.cpp")
     set_target_properties(declick_vst_verify PROPERTIES FOLDER "tests")
 else()
     message(STATUS "plugins/WinVST/Declick not present - skipping declick_vst_verify")
+endif()
+
+# ---------------------------------------------------------------------------
+# The WinVST port of the dehummer, against the core it shares with this tree.
+# Same arrangement as declick_vst_verify above: it compiles the WinVST folder's
+# own copy of dehum_core.cpp, because that is the file the VST project builds.
+# Whether that copy is still byte-identical is scripts/sync_cores.ps1 -Check.
+
+set(WINVST_DEHUM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../WinVST/Dehum")
+
+if(EXISTS "${WINVST_DEHUM_DIR}/Dehum.cpp")
+    add_executable(dehum_vst_verify
+        dehum_vst_verify.cpp
+        vst2_stub/audioeffectx.h
+        "${WINVST_DEHUM_DIR}/Dehum.cpp"
+        "${WINVST_DEHUM_DIR}/DehumProc.cpp"
+        "${WINVST_DEHUM_DIR}/dehum_core.cpp"
+    )
+
+    target_include_directories(dehum_vst_verify PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vst2_stub"
+        "${WINVST_DEHUM_DIR}")
+
+    if(MSVC)
+        target_compile_options(dehum_vst_verify PRIVATE /W4)
+        # The wrapper follows the Airwindows house pattern - `A = 0.5;` on a
+        # float, `out1[i] = inputSampleL;` from a double, and setChunk()
+        # ignoring byteSize on purpose - so it warns exactly where the other 519
+        # plug-ins do. Those are not ours to fix.
+        set_source_files_properties(
+            "${WINVST_DEHUM_DIR}/Dehum.cpp"
+            "${WINVST_DEHUM_DIR}/DehumProc.cpp"
+            PROPERTIES COMPILE_OPTIONS "/wd4244;/wd4305;/wd4100")
+    endif()
+
+    add_test(NAME dehum_vst_verify COMMAND dehum_vst_verify)
+    set_target_properties(dehum_vst_verify PROPERTIES FOLDER "tests")
+else()
+    message(STATUS "plugins/WinVST/Dehum not present - skipping dehum_vst_verify")
 endif()
 
 # ---------------------------------------------------------------------------

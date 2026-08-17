@@ -1158,6 +1158,20 @@ processing, a 65536-sample block, 4096 single-sample calls, 21 live parameter
 changes, `flush()`, `reset()` and manual mode, and prints the footprint before
 and after so a regression shows up in the log. All zero, 2073 kB either side.
 
+**`dehum_vst_verify`** holds the WinVST dehummer to the same maths — see
+[Sharing a core with the other plug-in formats](#sharing-a-core-with-the-other-plug-in-formats).
+Its central check drives `dehum::Channel` with the same `Config` and requires the
+plug-in's `processDoubleReplacing` output to be **bit-identical**, worst deviation
+**0.000e+00**. It also covers what this wrapper has to get right on its own: that
+block sizes from 1 to 4096 — including 1025, one past the scratch buffer it
+chunks through — all give the *same* stream; that the declared latency is zero
+and that **nothing** renegotiates it, for any parameter or across a sample rate
+change; that all seven sliders retune live without a gap; that `resume()` keeps
+what the detector learned rather than re-acquiring; that the float path is the
+double path plus dither to within a float ULP; hostile input; dry/wet 0 as a
+bit-exact bypass; the slider mappings against `Params::defaults()`, including the
+off positions on Freq and Rumble; and the preset chunk.
+
 **`preset_roundtrip`** saves each component's parameters to a `dsp_preset` and
 reads them back, checking every field individually with values chosen so that a
 field read out of position cannot pass by accident. It also covers the
@@ -1258,6 +1272,7 @@ tests/
   declick_vst_verify.cpp          the WinVST port vs. the core it shares
   dehum_verify.cpp                FFT, notch, tracker and detector vs. references
   dehum_rt_verify.cpp             ditto for the dehummer's audio thread
+  dehum_vst_verify.cpp            the WinVST dehummer vs. the core it shares
   vst2_stub/audioeffectx.h        our own minimal VST 2.4 declarations, so the above
                                   builds without Steinberg's SDK
   preset_roundtrip.cpp            parameters survive save/load, both components
@@ -1274,11 +1289,12 @@ source directly.
 
 ## Sharing a core with the other plug-in formats
 
-Declick has a second consumer: **`plugins/WinVST/Declick`**, a VST2 build of the
-same algorithm. It compiles `declick_core.{h,cpp}` — not a reimplementation of
-it, and not a translation. There is exactly one copy of the maths in this
-repository that anything is allowed to diverge from, and it is the one in
-`foo_dsp_declick/`.
+Two of the cores have a second consumer: **`plugins/WinVST/Declick`** and
+**`plugins/WinVST/Dehum`**, VST2 builds of the same algorithms. They compile
+`declick_core.{h,cpp}` and `dehum_core.{h,cpp}` — not reimplementations of them,
+and not translations. There is exactly one copy of each piece of maths in this
+repository that anything is allowed to diverge from, and it is the one under
+`foo_dsp_declick/` or `foo_dsp_dehum/`.
 
 The VST folder holds a **byte-identical copy** rather than reaching across the
 tree for this one. That is not laziness: an Airwindows WinVST folder has to
@@ -1295,13 +1311,13 @@ So the copies are mechanical and checked:
 ```
 
 `build_release.ps1` runs `-Check` before it configures anything, so a component
-whose maths no longer matches the VST's cannot be packaged. Adding a third
-format is one line in `$mirrors`.
+whose maths no longer matches the VST's cannot be packaged. Adding a format, or a
+core, is one entry in `$mirrors`.
 
 **Edit the copy in `foo_dsp_declick/`, never a mirror.** A mirror edit is not
 merged, it is overwritten.
 
-### What the VST wrapper adds, and why none of it is in the core
+### What the Declick VST wrapper adds, and why none of it is in the core
 
 | | |
 | --- | --- |
@@ -1310,20 +1326,35 @@ merged, it is overwritten.
 | **`Channel::retune()`** | foobar2000 has no automation, so rebuilding the pipeline on a preset change is acceptable there. A DAW moves sliders while audio runs, and `configure()` reallocates, which resets. `retune()` swaps in a config that needs the same buffers — everything except Max repair and Model order — with no discontinuity. |
 | **Dither** | Airwindows house style, on the 32-bit float path only. |
 
+### The Dehum VST wrapper is shorter, and mostly by subtraction
+
+Nearly everything on the list above is a consequence of Declick's lookahead.
+Dehum has none — the detector reads the signal but does not sit in the path — so
+its wrapper needs none of it:
+
+| | |
+| --- | --- |
+| **No pre-roll, no FIFO** | The core works in place and returns what it was given, so the wrapper is a copy, a `process()` call and a dither. |
+| **No latency to declare** | `setInitialDelay(0)` once in the constructor and nothing after it. `dehum_vst_verify` asserts `ioChanged()` is **never** called, for any parameter and across a sample rate change — the exact opposite of what it asserts for Declick. |
+| **No tail** | Nothing to keep pulling for at the end of an offline bounce, so no `getGetTailSize()`. |
+| **Every parameter retunes live** | Only the sample rate sizes anything in this core, so all seven sliders move without a rebuild, a reset or a gap. Declick can only manage five of its seven. |
+| **A scratch buffer** | The one thing it adds. The DSP is done in double while the float path dithers on the way out, so the doubles need somewhere to live: a fixed 1024-sample member, chunked, because the audio thread must not allocate. Splitting a buffer across chunks is undetectable to the core, which is what the block size checks establish — including a deliberate 1025, one past the scratch. |
+| **`resume()` flushes rather than resets** | The analysis window is stale across a transport jump and the integrators hold a discontinuity, but the hum on the far side is the same hum. Forgetting the lines would cost several seconds of it every time the user hit play; the test measures the hum still 34.9 dB down within 2 s of `resume()`. |
+
 The one thing that moved *into* the core is the flush-to-zero guard, which used
 to be a local class in `dsp_declick.cpp`. FTZ changes results in the last bits,
 so it is part of the numerical contract rather than an optimisation, and two
 ports that disagree about it are not comparable. It is now
 `declick::scoped_flush_denormals` and both wrappers hold one.
 
-### Checking that the two agree
+### Checking that they agree
 
 `processDoubleReplacing` is left undithered — that is the standard Airwindows
 arrangement, and it also makes it the path to compare. **`declick_vst_verify`**
-drives `declick::Channel` directly with the same `Config` and the same
-per-sample push/pull and requires the VST's 64-bit output to match to the bit;
-see [Verification](#verification). It runs on every build, on both
-architectures, and needs no SDK.
+and **`dehum_vst_verify`** drive `declick::Channel` and `dehum::Channel`
+directly with the same `Config`, and require each VST's 64-bit output to match to
+the bit. Both report **0.000e+00**. They run on every build, on both
+architectures, and need no SDK. See [Verification](#verification).
 
 Steinberg's `vst2.x` sources are not redistributable and are not here, so the
 VST itself cannot be built from a clean checkout — see

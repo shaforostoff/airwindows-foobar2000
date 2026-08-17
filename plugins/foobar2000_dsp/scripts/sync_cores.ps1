@@ -45,6 +45,11 @@ $mirrors = @(
         From  = Join-Path $root 'foo_dsp_declick'
         Files = @('declick_core.h', 'declick_core.cpp')
         To    = @(Join-Path $plugins 'WinVST\Declick')
+    },
+    @{
+        From  = Join-Path $root 'foo_dsp_dehum'
+        Files = @('dehum_core.h', 'dehum_core.cpp')
+        To    = @(Join-Path $plugins 'WinVST\Dehum')
     }
 )
 
