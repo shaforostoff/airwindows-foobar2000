@@ -37,8 +37,8 @@ enum {
     //! that clearly pays: measured against injected-click ground truth, order
     //! 128 takes whole-file error from +0.60 to +1.31 dB and order 256 to
     //! +2.55 dB, with less collateral damage and less residual crackle at the
-    //! same time. It costs real CPU, so the default stays at 32 - see the
-    //! README for the throughput figures.
+    //! same time. It costs real CPU, so the default sits at 64 rather than at
+    //! the top of the range - see the README for the throughput figures.
     kMaxOrder = 256,
     kBlock    = 512      //!< analysis hop; also sets most of the latency
 };
@@ -67,7 +67,12 @@ struct Params {
         // more of each click but substitutes more guesswork; see the README.
         p.depth       = 0.0f;
         p.passes      = 2;
-        p.order       = 32;
+        // 64. Model order is the one lever that clearly pays - see kMaxOrder -
+        // and 64 is where paying for it is still cheap: measured stereo at
+        // 44.1 kHz it costs about a third more CPU than 32, which leaves plenty
+        // of headroom under a real-time deadline. Go higher offline, where
+        // nothing has one.
+        p.order       = 64;
         p.dryWet      = 1.0f;
         return p;
     }

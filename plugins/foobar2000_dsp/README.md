@@ -204,7 +204,7 @@ Add *Declick (AR interpolation)* to the chain and press **Configure selected**.
 | **Extent** | How far a detection spreads into its own tail before the repair stops. Raise it if repairs leave a residual tick behind them. |
 | **Max repair** | Longest single repair. Anything longer is treated as music and left alone. 4 ms suits 78s. |
 | **Passes** | A second pass catches clicks the first one uncovers; the model is refitted in between. Small but real gain, roughly 50% more CPU. |
-| **Model order** | 8–256. The one control where spending CPU clearly buys quality: 128 measurably beats the default 32 and 256 beats that again. It is not the default because it costs about 3.6× and 10× the CPU respectively — but at 50× realtime, order 128 is affordable on far weaker hardware than it used to be. See [Does more CPU help?](#does-more-cpu-help). |
+| **Model order** | 8–256, default **64**. The one control where spending CPU clearly buys quality: 128 measurably beats 64 and 256 beats that again. Neither is the default because they cost roughly 3.6× and 10× the CPU of order 32, where 64 costs about a third more — but at 50× realtime, order 128 is affordable on far weaker hardware than it used to be. See [Does more CPU help?](#does-more-cpu-help). |
 | **Repair depth** | How much of each click to subtract. 0 removes the calibrated fraction that adds the least error of its own; 1 replaces the damaged samples outright. See [Repair depth](#repair-depth). |
 | **Dry/Wet** | 0 bypasses. |
 
@@ -519,7 +519,7 @@ interpolator identical, changing only the coefficients:
 
 | model | 1–3 | 4–6 | 7–10 | 11–15 | 16–23 | 24–40 | all |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| order 32, ctx ±96 (default) | 30.6 | 26.5 | 19.5 | 13.0 | 9.9 | 6.5 | **11.9** |
+| order 32, ctx ±96 | 30.6 | 26.5 | 19.5 | 13.0 | 9.9 | 6.5 | **11.9** |
 | order 32, ctx ±528 | 30.6 | 26.5 | 19.5 | 13.0 | 9.9 | 6.5 | **11.9** |
 | order 128, ctx ±528 | 31.2 | 27.2 | 21.8 | 16.3 | 12.7 | 9.9 | **15.0** |
 | order 256, ctx ±768 | 30.3 | 27.7 | 23.5 | 19.2 | 15.7 | 14.1 | **18.3** |
@@ -532,8 +532,8 @@ model changed:
 
 | | repair dB | harm dB | net dB | events/s |
 | --- | --- | --- | --- | --- |
-| order 32 (ships), w 0.45 | 1.79 | −42.4 | +0.60 | 28 |
-| order 64, w 0.45 | 2.47 | −41.2 | +0.76 | 28 |
+| order 32, w 0.45 | 1.79 | −42.4 | +0.60 | 28 |
+| order 64 (ships), w 0.45 | 2.47 | −41.2 | +0.76 | 28 |
 | order 128, w 0.45 | 2.87 | −42.1 | +1.31 | 29 |
 | **order 256, w 0.60** | **4.34** | **−42.8** | **+2.55** | **25** |
 
@@ -564,9 +564,11 @@ is roughly 3–4× slower per core than the machine above, and stereo doubles th
 work. After the optimisation below, **order 128 is viable on that machine** —
 it was not before.
 
-`kMaxOrder` is 256 and **the default stays 32**, because tripling the CPU cost
-of a component is the user's call, not a silent change. If you have the
-headroom, order 128 is the setting to reach for.
+`kMaxOrder` is 256 and **the default is 64** — where paying for the one lever
+that clearly pays is still cheap, at about a third more CPU than 32, which
+leaves plenty of headroom under a real-time deadline. Going further is the
+user's call rather than a silent change; if you have the headroom, order 128 is
+the setting to reach for, and offline nothing has a deadline at all.
 
 #### Where the time goes, and what was done about it
 
@@ -634,10 +636,10 @@ Add *Dehum (line detection)* to the chain and press **Configure selected**.
 | --- | --- |
 | **Sensitivity** | How prominent a line has to be. 0 → 22 dB, 1 → 10 dB; the default 0.5 is 16 dB. Raise it if hum survives, lower it if music is being touched. |
 | **Bandwidth** | Half width of each notch, 0.1–5 Hz. Wider catches a drifting line at the cost of more music around it. |
-| **Search to** | Top of the range searched automatically, 40–500 Hz. The bottom is fixed at 16 Hz. |
+| **Search to** | Top of the range searched automatically, 40–500 Hz, default **100 Hz**. The bottom is fixed at 16 Hz. Detection weakens over the top 20 Hz of whatever you set — prominence is measured against a baseline 20 Hz either side, and that window runs out of room at the edge of the band — so treat the usable ceiling as roughly 20 Hz under the setting, and reach for **Frequency** for a line above it. |
 | **Harmonics** | Multiples of each detected line to cancel as well, 1–8, default **1**. Locked to exact multiples of the fundamental, not tracked separately. Raise it for a genuine mains buzz; leave it alone otherwise, because a notch removes the coherent part at its frequency whether or not that part is hum — see below. |
 | **Frequency** | 0 = detect automatically. Anything else pins the fundamental there and turns the detector off. **This is the control to use if you already know the frequency**, because it acts immediately where detection needs a few seconds. |
-| **Rumble** | 4th-order Butterworth high-pass, default **40 Hz**, 0 = off. Broadband low-frequency noise is a *different defect* from hum — see below — and this is the control for it. 40 Hz is the cautious end: about 4 dB out of the 32–45 Hz band, nothing above 90 Hz touched. **60 Hz is what the rumbly reference transfer actually wants** (12.9 dB) and is the first thing to try if rumble survives. |
+| **Rumble** | 4th-order Butterworth high-pass, default **67 Hz**, 0 = off. Broadband low-frequency noise is a *different defect* from hum — see below — and this is the control for it. 40 Hz was the cautious end: about 4 dB out of the 32–45 Hz band, nothing above 90 Hz touched, safe on material that has real bass — but it leaves rumble audible on the transfers that have it. **67 Hz goes after it properly.** It takes the bottom octave of a double bass with it, so wind it back towards 40 where the low end is worth keeping. |
 | **Dry/Wet** | 0 bypasses, bit-exactly. |
 
 Latency is **zero**: the detector reads the signal but does not sit in the path,
@@ -880,7 +882,7 @@ On the **controls** — the hum-free transfers of the same two performances — 
 detector confirms **no lines at all**, and with `Rumble` at 0 the output is
 bit-identical to the input. That is the result that matters most: a restoration
 tool that fires on clean material is worse than none. (At the default `Rumble` of
-40 Hz the output is of course not bit-identical — the high-pass runs regardless
+67 Hz the output is of course not bit-identical — the high-pass runs regardless
 of what the detector decides.)
 
 On **cachirulo**, whose defect is rumble rather than a prominent line, the

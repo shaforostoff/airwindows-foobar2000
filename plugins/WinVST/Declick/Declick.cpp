@@ -20,7 +20,8 @@ Declick::Declick(audioMasterCallback audioMaster) :
 	C = 0.2;  //MaxLen, 4.0 ms
 	D = 0.0;  //Depth, the fraction that adds the least error of its own
 	E = 0.5;  //Passes, 2
-	F = 0.5;  //Order, 32
+	F = 1.0;  //Order, 64 - the top of this slider, which stops where the
+	          //real-time budget does; the core itself goes to kMaxOrder
 	G = 1.0;  //Dry/Wet
 
 	//the channels allocate on configure(), so get that out of the audio thread
@@ -65,8 +66,8 @@ static float pinParameter(float data)
 	return data;
 }
 
-//Sliders to core units. The quantized ones use equal-width buckets, so E and F
-//at 0.5 land on the 2 passes and order 32 that the tuning was done at.
+//Sliders to core units. The quantized ones use equal-width buckets, so E at 0.5
+//lands on the 2 passes the tuning was done at, and F at 1.0 on order 64.
 declick::Params Declick::paramsFromControls()
 {
 	declick::Params p = declick::Params::defaults();

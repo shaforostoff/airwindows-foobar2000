@@ -224,8 +224,11 @@ struct Params {
         p.bandwidth   = 1.0f;
         // Hum lives low. Searching further up finds sustained musical notes
         // instead - during calibration a bandoneon E4 at 329 Hz was detected as
-        // hum in both transfers of the same piece and duly cancelled.
-        p.searchTo    = 150.0f;
+        // hum in both transfers of the same piece and duly cancelled. 100 Hz
+        // keeps the search under the register where tango basses and bandoneon
+        // fundamentals sit. The cost is missing a line above it, which is what
+        // Frequency is there for when one turns up.
+        p.searchTo    = 100.0f;
         // 1. Harmonics are a mains-hum idea and cost music when they are not
         //    there: a notch removes the coherent part at its frequency whether
         //    or not that part is hum, and multiples of a low fundamental land
@@ -237,15 +240,17 @@ struct Params {
         //    Raise this for a genuine mains buzz, where they do exist.
         p.harmonics   = 1;
         p.frequency   = 0.0f;
-        // 40 Hz. Broadband low-frequency rumble is a different defect from hum -
+        // 67 Hz. Broadband low-frequency rumble is a different defect from hum -
         // see the README - but it shares the band, it is what dominates one of
         // the two reference transfers, and leaving this off meant the component
-        // did nothing at all to that file. 40 Hz is the cautious end of what the
-        // measurements support: about 4 dB out of the 32-45 Hz band, nothing
-        // above 90 Hz touched, and little enough below that it is safe on
-        // material that does have real bass. 60 Hz is what that transfer
-        // actually wants, and is the first thing to try if rumble survives.
-        p.rumbleHz    = 40.0f;
+        // did nothing at all to that file. 40 Hz was the cautious end of what
+        // the measurements support: about 4 dB out of the 32-45 Hz band and
+        // nothing above 90 Hz touched, which is safe on material that does have
+        // real bass but leaves rumble audible on the transfers that have it.
+        // 67 Hz goes after it properly. It takes the bottom octave of a double
+        // bass with it, so wind it back towards 40 where the low end is worth
+        // keeping.
+        p.rumbleHz    = 67.0f;
         p.dryWet      = 1.0f;
         return p;
     }

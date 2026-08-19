@@ -283,15 +283,18 @@ void testParameterMoves(const std::vector<double> & inL, const std::vector<doubl
     char d[64]; snprintf(d, sizeof d, "longest silent run %d samples", worstRun);
     check(worstRun < 64, "a Sensitivity move leaves no gap in the audio", d);
 
-    fx.setParameter(kParamF, 1.0f);             // Model order: rebuild
+    // Down to 32, not up to 64: the default is order 64 and the slider tops out
+    // there, so moving to 1.0 would be moving to where it already is and would
+    // prove nothing about renegotiation.
+    fx.setParameter(kParamF, 0.5f);             // Model order: rebuild
     runBlocks(fx, inL, inR, aL, aR, bs);
-    declick::Params p64 = declick::Params::defaults();
-    p64.sensitivity = 0.85f;
-    p64.order = 64;
-    declick::Config c64; c64.compute(p64, (double)kRate);
-    snprintf(d, sizeof d, "%d -> %d samples", (int)c64.pad, (int)fx.getAeffect()->initialDelay);
+    declick::Params p32 = declick::Params::defaults();
+    p32.sensitivity = 0.85f;
+    p32.order = 32;
+    declick::Config c32; c32.compute(p32, (double)kRate);
+    snprintf(d, sizeof d, "%d -> %d samples", (int)c32.pad, (int)fx.getAeffect()->initialDelay);
     check(g_ioChanged > baseline, "a Model order move renegotiates latency");
-    check(fx.getAeffect()->initialDelay == c64.latency, "the rebuilt latency is the one order 64 needs", d);
+    check(fx.getAeffect()->initialDelay == c32.latency, "the rebuilt latency is the one order 32 needs", d);
     check(fx.getGetTailSize() == fx.getAeffect()->initialDelay,
           "declared delay and tail stay consistent after a rebuild");
 }
@@ -416,7 +419,7 @@ void testParameterMapping() {
         { kParamE, 0.5f, 2.0,  "Passes at the default slider reads 2" },
         { kParamE, 0.0f, 1.0,  "Passes at 0.0 reads 1" },
         { kParamE, 1.0f, 3.0,  "Passes at 1.0 reads 3" },
-        { kParamF, 0.5f, 32.0, "Model order at the default slider reads 32" },
+        { kParamF, 0.5f, 32.0, "Model order at mid slider reads 32" },
         { kParamF, 0.0f, 8.0,  "Model order at 0.0 reads 8" },
         { kParamF, 1.0f, 64.0, "Model order at 1.0 reads 64" }
     };

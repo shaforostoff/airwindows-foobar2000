@@ -16,10 +16,10 @@ AudioEffect* createEffectInstance(audioMasterCallback audioMaster) {return new D
 //"default" means. dehum_vst_verify pins these against Params::defaults().
 static const float kDefaultA = 0.5f;            //Sensitv 0.5 -> 16 dB
 static const float kDefaultB = 0.9f / 4.9f;     //Bandwid -> 1.00 Hz
-static const float kDefaultC = 110.0f / 460.0f; //SearchTo -> 150 Hz
+static const float kDefaultC = 60.0f / 460.0f;  //SearchTo -> 100 Hz
 static const float kDefaultD = 0.0f;            //Harmnics -> 1
 static const float kDefaultE = 0.0f;            //Freq -> auto
-static const float kDefaultF = 0.02f + (30.0f / 190.0f) * 0.98f;  //Rumble -> 40 Hz
+static const float kDefaultF = 0.02f + (57.0f / 190.0f) * 0.98f;  //Rumble -> 67 Hz
 static const float kDefaultG = 1.0f;            //Dry/Wet
 
 Dehum::Dehum(audioMasterCallback audioMaster) :

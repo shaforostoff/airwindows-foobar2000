@@ -101,7 +101,25 @@ void testDetectorOnBinCentres() {
     dehum::Config cfg = makeConfig(p, sr);
     const double binHz = sr / (double)cfg.fftSize;
 
-    const double targets[3] = { 24.0 * binHz, 60.0 * binHz, 150.0 * binHz };
+    // The ends are derived from the nominal search range rather than written out
+    // as bin numbers. searchTo is a tuning decision and has already been
+    // narrowed once; a hardcoded top bin quietly turned into a test of whether
+    // the detector ignores things above its range - a different test, and one it
+    // passes by doing nothing.
+    //
+    // The top target is kBaselineHz below searchTo, not at it. The baseline
+    // median clamps at the edge of the analysed band, so within kBaselineHz of
+    // the top the window fills with copies of the peak's own shoulder, the
+    // baseline rises to meet the line and the prominence collapses to a few dB.
+    // The bottom does not suffer from it - there the repeated bin is below the
+    // line and clamping only flatters the prominence - which is why binLo is set
+    // two bins under kSearchFloor and nothing more was needed.
+    //
+    // So this is the top of the range the detector can actually resolve, and
+    // testing above it would be testing the edge effect rather than the FFT.
+    const double targets[3] = { ceil((double)dehum::kSearchFloor / binHz) * binHz,
+                                60.0 * binHz,
+                                floor(((double)p.searchTo - dehum::kBaselineHz) / binHz) * binHz };
     for (int t = 0; t < 3; ++t) {
         const double f = targets[t];
         std::vector<double> buf((size_t)(sr * 30.0), 0.0);
