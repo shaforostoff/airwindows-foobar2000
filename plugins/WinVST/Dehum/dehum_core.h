@@ -331,15 +331,19 @@ struct Config {
 //! recursion towards zero, so denormals are reachable and slow. FTZ changes
 //! results in the last bits, so it is part of the numerical contract rather than
 //! an optimisation, and every wrapper holds one across its processing loop.
+//!
+//! MXCSR.FTZ on x86, FPCR.FZ on AArch64. Holding only the x86 half - which is
+//! all this did until the ARM builds appeared - leaves the two ports disagreeing.
 class scoped_flush_denormals {
 public:
     scoped_flush_denormals(const scoped_flush_denormals &) = delete;
     void operator=(const scoped_flush_denormals &) = delete;
-#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__)
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__) || \
+    defined(_M_ARM64) || defined(__aarch64__)
     scoped_flush_denormals();
     ~scoped_flush_denormals();
 private:
-    unsigned m_saved;
+    unsigned m_saved;   //!< MXCSR, or the defined low half of FPCR
 #else
     scoped_flush_denormals() {}
 #endif

@@ -9,6 +9,12 @@
 
 #if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__)
 #include <xmmintrin.h>
+#define DEHUM_HAVE_MXCSR 1
+#elif defined(_M_ARM64) || defined(__aarch64__)
+#define DEHUM_HAVE_FPCR 1
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 #endif
 
 namespace dehum {
@@ -43,7 +49,7 @@ inline bool sane(double v) {
 // Flush-to-zero
 // ---------------------------------------------------------------------------
 
-#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__)
+#if defined(DEHUM_HAVE_MXCSR)
 scoped_flush_denormals::scoped_flush_denormals() : m_saved(_mm_getcsr()) {
     // FTZ only. DAZ lives in bit 6, which the earliest SSE2 parts treat as
     // reserved, and writing it there raises a general protection fault.
@@ -51,6 +57,44 @@ scoped_flush_denormals::scoped_flush_denormals() : m_saved(_mm_getcsr()) {
 }
 scoped_flush_denormals::~scoped_flush_denormals() {
     _mm_setcsr(m_saved);
+}
+
+#elif defined(DEHUM_HAVE_FPCR)
+
+namespace {
+
+// FPCR bit 24 (FZ) is AArch64's MXCSR.FTZ. Bits 63:32 are RES0, so keeping only
+// the low half in m_saved round-trips the register.
+const unsigned kFpcrFlushToZero = 1u << 24;
+
+inline unsigned readFpcr() {
+#if defined(_MSC_VER)
+    return (unsigned)_ReadStatusReg(ARM64_FPCR);
+#else
+    uint64_t value;
+    __asm__ __volatile__("mrs %0, fpcr" : "=r"(value));
+    return (unsigned)value;
+#endif
+}
+
+inline void writeFpcr(unsigned value) {
+#if defined(_MSC_VER)
+    _WriteStatusReg(ARM64_FPCR, value);
+#else
+    // The clobber stops the arithmetic this is meant to govern being scheduled
+    // across the write.
+    uint64_t wide = value;
+    __asm__ __volatile__("msr fpcr, %0" : : "r"(wide) : "memory");
+#endif
+}
+
+} // anonymous namespace
+
+scoped_flush_denormals::scoped_flush_denormals() : m_saved(readFpcr()) {
+    writeFpcr(m_saved | kFpcrFlushToZero);
+}
+scoped_flush_denormals::~scoped_flush_denormals() {
+    writeFpcr(m_saved);
 }
 #endif
 

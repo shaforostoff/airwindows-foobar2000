@@ -16,6 +16,12 @@
 // scalar fallback below is kept correct for anything else.
 #include <emmintrin.h>
 #define DECLICK_SSE2 1
+#elif defined(_M_ARM64) || defined(__aarch64__)
+#define DECLICK_HAVE_FPCR 1
+#define DECLICK_SSE2 0
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 #else
 #define DECLICK_SSE2 0
 #endif
@@ -29,6 +35,44 @@ scoped_flush_denormals::scoped_flush_denormals() : m_saved(_mm_getcsr()) {
 }
 scoped_flush_denormals::~scoped_flush_denormals() {
     if ((m_saved & 0x8000u) == 0u) _mm_setcsr(m_saved);
+}
+
+#elif defined(DECLICK_HAVE_FPCR)
+
+namespace {
+
+// FPCR bit 24 (FZ) is AArch64's MXCSR.FTZ. Bits 63:32 are RES0, so keeping only
+// the low half in m_saved round-trips the register.
+const unsigned kFpcrFlushToZero = 1u << 24;
+
+inline unsigned readFpcr() {
+#if defined(_MSC_VER)
+    return (unsigned)_ReadStatusReg(ARM64_FPCR);
+#else
+    uint64_t value;
+    __asm__ __volatile__("mrs %0, fpcr" : "=r"(value));
+    return (unsigned)value;
+#endif
+}
+
+inline void writeFpcr(unsigned value) {
+#if defined(_MSC_VER)
+    _WriteStatusReg(ARM64_FPCR, value);
+#else
+    // The clobber stops the arithmetic this is meant to govern being scheduled
+    // across the write.
+    uint64_t wide = value;
+    __asm__ __volatile__("msr fpcr, %0" : : "r"(wide) : "memory");
+#endif
+}
+
+} // anonymous namespace
+
+scoped_flush_denormals::scoped_flush_denormals() : m_saved(readFpcr()) {
+    if ((m_saved & kFpcrFlushToZero) == 0u) writeFpcr(m_saved | kFpcrFlushToZero);
+}
+scoped_flush_denormals::~scoped_flush_denormals() {
+    if ((m_saved & kFpcrFlushToZero) == 0u) writeFpcr(m_saved);
 }
 #endif
 
