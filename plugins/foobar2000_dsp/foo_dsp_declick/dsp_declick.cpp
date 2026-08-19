@@ -64,6 +64,11 @@ public:
         const t_size frames = chunk->get_sample_count();
         if (channels == 0 || rate == 0 || frames == 0) return true;
 
+        // Before anything else, so that no part of the previous record reaches
+        // this one: neither the audio still sitting in the window nor what the
+        // model measured from it.
+        updateTrack();
+
         Params params;
         {
             std::lock_guard<std::mutex> lock(m_lock);
@@ -87,24 +92,25 @@ public:
                 m_chan[c]->push(data + c, frames, channels);
             }
         }
+        m_owed += frames;
 
-        return emit(frames);
+        return emit();
     }
 
     void on_endofplayback(abort_callback &) override {
-        if (m_chan.empty()) return;
-        {
-            scoped_flush_denormals ftz;
-            for (size_t c = 0; c < m_chan.size(); ++c) m_chan[c]->drain();
-        }
-        emit(0);
-        for (size_t c = 0; c < m_chan.size(); ++c) m_chan[c]->reset();
+        finishTrack();
+        m_track.release();
     }
 
+    //! Never called: need_track_change_mark() is false and the boundary is
+    //! noticed from on_chunk() instead. See updateTrack() for why.
     void on_endoftrack(abort_callback &) override {}
 
+    //! A seek. Everything held is audio the listener is not going to hear, so it
+    //! goes, and with it the noise floor measured on the far side.
     void flush() override {
         for (size_t c = 0; c < m_chan.size(); ++c) m_chan[c]->reset();
+        m_owed = 0;
     }
 
     double get_latency() override {
@@ -115,11 +121,71 @@ public:
     bool need_track_change_mark() override { return false; }
 
 private:
+    //! Notices the track changing under us, which is the only place the per-track
+    //! handling starts.
+    //!
+    //! A DSP can ask to be told about the boundary directly, through
+    //! need_track_change_mark() and on_endoftrack(), but that force-flushes every
+    //! DSP placed ahead of this one - the SDK calls it out as a way to break
+    //! gapless playback - and get_cur_file() answers the same question for
+    //! nothing. The dehummer reads the boundary the same way, for the same
+    //! reason.
+    void updateTrack() {
+        metadb_handle_ptr track;
+        get_cur_file(track);
+        if (track.get_ptr() == m_track.get_ptr()) return;
+        finishTrack();
+        m_track = track;
+    }
+
+    //! Runs the tail of a track out and puts the pipeline back to its opening
+    //! state. Both halves matter.
+    //!
+    //! The drain is what keeps the last `latency` samples of a track from being
+    //! emitted into the beginning of the next one - the pipeline is read ahead
+    //! of what is being heard, so at the moment the last chunk of a track
+    //! arrives those samples are still inside it.
+    //!
+    //! The reset is what keeps each record to itself. The window still holds the
+    //! previous track's audio, and `m_scale` and the MAD ring hold the noise
+    //! floor measured from it; a transfer with a quieter surface would then be
+    //! judged against the louder one for the first second or so of the model
+    //! re-converging, and every detection threshold in the core is relative to
+    //! that scale.
+    //!
+    //! A no-op before the first chunk of the first track, when there is neither
+    //! a pipeline nor anything owed.
+    void finishTrack() {
+        if (m_chan.empty()) return;
+        {
+            scoped_flush_denormals ftz;
+            for (size_t c = 0; c < m_chan.size(); ++c) m_chan[c]->drain();
+        }
+        emit();
+        for (size_t c = 0; c < m_chan.size(); ++c) m_chan[c]->reset();
+        m_owed = 0;
+    }
+
+    //! How much of what the pipeline has finished is real audio. In the steady
+    //! state that is all of it and this is just available().
+    //!
+    //! It stops being all of it during a drain: those `latency` zeros are fed in
+    //! to push the last real samples out, and the model answers with `latency`
+    //! samples of which only the first m_owed belong to the track - the rest is
+    //! the zeros coming back round. Emitting them would put up to a block of
+    //! silence into the middle of a gapless playlist, which is the one thing
+    //! draining at a track boundary must not do, so they are left in the ring
+    //! for reset() to drop.
+    size_t ready() const {
+        const size_t avail = m_chan[0]->available();
+        return ((uint64_t)avail > m_owed) ? (size_t)m_owed : avail;
+    }
+
     //! Moves whatever the pipeline has finished into the chunk list. Returns
     //! false if the caller's chunk should be dropped (nothing ready yet).
-    bool emit(t_size /*consumed*/) {
+    bool emit() {
         if (m_chan.empty()) return true;
-        size_t avail = m_chan[0]->available();
+        size_t avail = ready();
         if (avail == 0) return false;      // still filling; drop the input chunk
 
         const unsigned channels = m_channels;
@@ -135,7 +201,8 @@ private:
             for (unsigned c = 0; c < channels; ++c) {
                 m_chan[c]->pull(p + c, n, channels);
             }
-            avail = m_chan[0]->available();
+            m_owed -= n;
+            avail = ready();
         }
         return false;    // our own chunks carry the audio; drop the original
     }
@@ -144,9 +211,12 @@ private:
                      const Params & params) {
         // Push out anything still held before the buffers are rebuilt.
         if (!m_chan.empty()) {
-            scoped_flush_denormals ftz;
-            for (size_t c = 0; c < m_chan.size(); ++c) m_chan[c]->drain();
-            emit(0);
+            {
+                scoped_flush_denormals ftz;
+                for (size_t c = 0; c < m_chan.size(); ++c) m_chan[c]->drain();
+            }
+            emit();
+            m_owed = 0;
         }
 
         Config cfg;
@@ -183,6 +253,11 @@ private:
     unsigned m_channels = 0;
     unsigned m_rate = 0;
     unsigned m_config = 0;
+
+    //! The track whose audio the pipeline is holding, and how much of that audio
+    //! has gone in but not yet come out. See updateTrack() and ready().
+    metadb_handle_ptr m_track;
+    uint64_t m_owed = 0;
 };
 
 static dsp_factory_t<dsp_declick> g_dsp_declick_factory;

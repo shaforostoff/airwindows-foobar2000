@@ -230,7 +230,23 @@ desktop. See [Where the time goes](#where-the-time-goes-and-what-was-done-about-
 Latency ~18 ms, reported to foobar2000 so visualisations stay in sync. Note
 that `config().latency` is a buffering delay, not a shift: that many samples
 must go in before the first block comes out, but the emitted stream is aligned
-with the input.
+with the input. The component reads ahead rather than holding the output back —
+it feeds every chunk in and emits whatever the pipeline has finished — so what
+those 18 ms describe is how far ahead of the listener the decoder is running,
+which is exactly what `get_latency()` exists to tell the core.
+
+**Nothing is carried from one track to the next.** Every record has its own
+surface, and the noise floor the model measures is what every threshold in the
+core is relative to, so the pipeline is emptied and reset at each track
+boundary: the window stops holding the previous transfer, and so does `m_scale`.
+The boundary is noticed from `get_cur_file()` rather than by asking for a track
+change mark, because asking force-flushes every DSP placed ahead of this one and
+the SDK calls that out as a way to break gapless playback. Reading ahead is what
+makes the drain necessary — at the moment the last chunk of a track arrives, its
+final `latency` samples are still inside the pipeline, and without draining they
+would be emitted into the opening of the next track. The drain is capped at the
+samples the pipeline actually owes, so the zeros it is fed to push that tail out
+never reach the stream and no silence is spliced into a gapless playlist.
 
 Memory is **750 kB per channel** at 44.1 kHz and 1.5 MB at 192 kHz, fixed at
 `configure()` and independent of the parameters — see
