@@ -19,23 +19,54 @@ namespace {
 //! Each slider works in integer steps and maps onto its parameter through
 //! `lo + pos * step`. Keeping the mapping in a table lets one handler drive
 //! all six of them.
+//!
+//! `help` is the hover text, shared word for word with the AU's parameter
+//! tooltips; it is condensed from the rationale in declick_core.h, which has
+//! the measurements behind it.
 struct slider_def {
     int    sliderId;
+    int    labelId;
     int    valueId;
     int    steps;        // slider range is 0..steps
     double lo, hi;       // parameter range
     int    decimals;     // for the readout
     const wchar_t * suffix;
+    const wchar_t * help;
 };
 
 const slider_def k_sliders[] = {
-    { IDC_SLIDER_SENSITIVITY, IDC_VALUE_SENSITIVITY, 1000,  0.0,  1.0, 3, L""    },
-    { IDC_SLIDER_EXTENT,      IDC_VALUE_EXTENT,      1000,  0.0,  1.0, 3, L""    },
-    { IDC_SLIDER_MAXLEN,      IDC_VALUE_MAXLEN,       198,  0.2, 20.0, 1, L" ms" },
-    { IDC_SLIDER_PASSES,      IDC_VALUE_PASSES,         2,  1.0,  3.0, 0, L""    },
-    { IDC_SLIDER_ORDER,       IDC_VALUE_ORDER,        124,  8.0, 256.0, 0, L""   },
-    { IDC_SLIDER_DEPTH,       IDC_VALUE_DEPTH,       1000,  0.0,  1.0, 3, L""    },
-    { IDC_SLIDER_DRYWET,      IDC_VALUE_DRYWET,      1000,  0.0,  1.0, 3, L""    },
+    { IDC_SLIDER_SENSITIVITY, IDC_LABEL_SENSITIVITY, IDC_VALUE_SENSITIVITY, 1000,  0.0,  1.0, 3, L"",
+      L"How readily a sample is called a click. The default puts the trigger at 3.9 sigma above "
+      L"the local noise estimate; on 78rpm tango transfers that takes impulsive events from "
+      L"roughly 71 per second down to 14. Raise it towards 0.8 to catch more, at the cost of "
+      L"flagging music as damage." },
+
+    { IDC_SLIDER_EXTENT,      IDC_LABEL_EXTENT,      IDC_VALUE_EXTENT,      1000,  0.0,  1.0, 3, L"",
+      L"How far each detection spreads outwards into the tail of the click. Higher repairs more "
+      L"of the decay; too high starts replacing good audio either side of it." },
+
+    { IDC_SLIDER_MAXLEN,      IDC_LABEL_MAXLEN,      IDC_VALUE_MAXLEN,       198,  0.2, 20.0, 1, L" ms",
+      L"The longest single stretch that may be reconstructed. Damage longer than this is left "
+      L"alone rather than guessed at." },
+
+    { IDC_SLIDER_PASSES,      IDC_LABEL_PASSES,      IDC_VALUE_PASSES,         2,  1.0,  3.0, 0, L"",
+      L"How many times the detector sweeps each block. A second pass catches clicks that the "
+      L"first pass's repairs uncover." },
+
+    { IDC_SLIDER_ORDER,       IDC_LABEL_ORDER,       IDC_VALUE_ORDER,        124,  8.0, 256.0, 0, L"",
+      L"Taps in the autoregressive model that predicts what the waveform should have been. The "
+      L"lever that pays most: against injected-click ground truth, 128 takes whole-file error "
+      L"from +0.60 to +1.31 dB and 256 to +2.55 dB. It also costs real CPU and adds latency, "
+      L"which is why the default stops at 64." },
+
+    { IDC_SLIDER_DEPTH,       IDC_LABEL_DEPTH,       IDC_VALUE_DEPTH,       1000,  0.0,  1.0, 3, L"",
+      L"How much of the estimated click is subtracted. 0 is the setting measured to add the "
+      L"least error of its own, against real clicks injected into a clean master at known "
+      L"positions. Raising it removes more of each click but substitutes more guesswork." },
+
+    { IDC_SLIDER_DRYWET,      IDC_LABEL_DRYWET,      IDC_VALUE_DRYWET,      1000,  0.0,  1.0, 3, L"",
+      L"Blend of the repaired signal against the original. 0 passes the input through "
+      L"untouched." },
 };
 
 const size_t k_count = sizeof(k_sliders) / sizeof(k_sliders[0]);
@@ -103,6 +134,45 @@ void load_controls(HWND dlg, dialog_state * st) {
     }
 }
 
+//! One tooltip control owned by the dialog, with the label, the slider and the
+//! readout of a row all registered against that row's text, so the hint comes
+//! up wherever on the row the pointer lands. TTF_SUBCLASS has the tooltip pick
+//! the mouse messages up itself: a modal DialogBoxParam loop has nowhere to
+//! hang a TTM_RELAYEVENT forwarder.
+void create_tooltips(HWND dlg) {
+    const HWND tips = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL,
+                                      WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
+                                      CW_USEDEFAULT, CW_USEDEFAULT,
+                                      CW_USEDEFAULT, CW_USEDEFAULT,
+                                      dlg, NULL, core_api::get_my_instance(), NULL);
+    if (tips == NULL) return;
+
+    // Without a maximum width a tooltip is laid out on a single line, and these
+    // run to several sentences. The pop-up timeout goes up to match: the
+    // default takes the longest of them away before it can be read.
+    SendMessage(tips, TTM_SETMAXTIPWIDTH, 0, 360);
+    SendMessage(tips, TTM_SETDELAYTIME, TTDT_AUTOPOP, MAKELPARAM(30000, 0));
+
+    for (size_t i = 0; i < k_count; ++i) {
+        const int row[3] = { k_sliders[i].labelId,
+                             k_sliders[i].sliderId,
+                             k_sliders[i].valueId };
+        for (int k = 0; k < 3; ++k) {
+            const HWND control = GetDlgItem(dlg, row[k]);
+            if (control == NULL) continue;
+
+            TTTOOLINFOW ti;
+            memset(&ti, 0, sizeof(ti));
+            ti.cbSize   = TTTOOLINFOW_V2_SIZE;  // accepted by both comctl32 v5 and v6
+            ti.uFlags   = TTF_IDISHWND | TTF_SUBCLASS;
+            ti.hwnd     = dlg;
+            ti.uId      = (UINT_PTR)control;
+            ti.lpszText = (LPWSTR)k_sliders[i].help;
+            SendMessage(tips, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+        }
+    }
+}
+
 INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     dialog_state * st = (dialog_state *)GetWindowLongPtr(dlg, GWLP_USERDATA);
 
@@ -119,6 +189,7 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
             SendDlgItemMessage(dlg, k_sliders[i].sliderId, TBM_SETLINESIZE, 0, 1);
         }
         load_controls(dlg, st);
+        create_tooltips(dlg);
         return TRUE;
 
     case WM_HSCROLL: {

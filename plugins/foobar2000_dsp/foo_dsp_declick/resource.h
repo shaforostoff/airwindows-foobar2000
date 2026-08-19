@@ -25,7 +25,15 @@
 #define IDC_VALUE_DEPTH             2016
 #define IDC_VALUE_DRYWET            2017
 
+#define IDC_LABEL_SENSITIVITY       2021
+#define IDC_LABEL_EXTENT            2022
+#define IDC_LABEL_MAXLEN            2023
+#define IDC_LABEL_PASSES            2024
+#define IDC_LABEL_ORDER             2025
+#define IDC_LABEL_DEPTH             2026
+#define IDC_LABEL_DRYWET            2027
+
 #define IDC_HINT                    2020
-#define IDC_DEFAULTS                2021
+#define IDC_DEFAULTS                2030
 
 #endif // FOO_DSP_DECLICK_RESOURCE_H

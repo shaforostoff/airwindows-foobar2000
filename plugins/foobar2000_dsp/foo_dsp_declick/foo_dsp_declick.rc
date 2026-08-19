@@ -13,33 +13,33 @@ STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSM
 CAPTION "Declick"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    LTEXT           "Sensitivity",IDC_STATIC,7,12,52,8
+    LTEXT           "Sensitivity",IDC_LABEL_SENSITIVITY,7,12,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_SENSITIVITY,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,9,178,15
-    RTEXT           "0.600",IDC_VALUE_SENSITIVITY,244,12,41,8
+    RTEXT           "0.600",IDC_VALUE_SENSITIVITY,244,12,41,8,SS_NOTIFY
 
-    LTEXT           "Extent",IDC_STATIC,7,34,52,8
+    LTEXT           "Extent",IDC_LABEL_EXTENT,7,34,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_EXTENT,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,31,178,15
-    RTEXT           "0.500",IDC_VALUE_EXTENT,244,34,41,8
+    RTEXT           "0.500",IDC_VALUE_EXTENT,244,34,41,8,SS_NOTIFY
 
-    LTEXT           "Max repair",IDC_STATIC,7,56,52,8
+    LTEXT           "Max repair",IDC_LABEL_MAXLEN,7,56,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_MAXLEN,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,53,178,15
-    RTEXT           "4.0 ms",IDC_VALUE_MAXLEN,244,56,41,8
+    RTEXT           "4.0 ms",IDC_VALUE_MAXLEN,244,56,41,8,SS_NOTIFY
 
-    LTEXT           "Passes",IDC_STATIC,7,78,52,8
+    LTEXT           "Passes",IDC_LABEL_PASSES,7,78,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_PASSES,"msctls_trackbar32",TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP,62,75,178,15
-    RTEXT           "2",IDC_VALUE_PASSES,244,78,41,8
+    RTEXT           "2",IDC_VALUE_PASSES,244,78,41,8,SS_NOTIFY
 
-    LTEXT           "Model order",IDC_STATIC,7,100,52,8
+    LTEXT           "Model order",IDC_LABEL_ORDER,7,100,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_ORDER,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,97,178,15
-    RTEXT           "32",IDC_VALUE_ORDER,244,100,41,8
+    RTEXT           "32",IDC_VALUE_ORDER,244,100,41,8,SS_NOTIFY
 
-    LTEXT           "Repair depth",IDC_STATIC,7,122,52,8
+    LTEXT           "Repair depth",IDC_LABEL_DEPTH,7,122,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_DEPTH,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,119,178,15
-    RTEXT           "0.000",IDC_VALUE_DEPTH,244,122,41,8
+    RTEXT           "0.000",IDC_VALUE_DEPTH,244,122,41,8,SS_NOTIFY
 
-    LTEXT           "Dry/Wet",IDC_STATIC,7,144,52,8
+    LTEXT           "Dry/Wet",IDC_LABEL_DRYWET,7,144,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_DRYWET,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,141,178,15
-    RTEXT           "1.000",IDC_VALUE_DRYWET,244,144,41,8
+    RTEXT           "1.000",IDC_VALUE_DRYWET,244,144,41,8,SS_NOTIFY
 
     LTEXT           "Sensitivity is the one to reach for: raise it until the crackle goes, then back off as soon as the music dulls. Repair depth 0 subtracts the fraction of each click that adds the least error of its own; raise it to strip more, at the cost of more guesswork.",
                     IDC_HINT,7,164,278,26

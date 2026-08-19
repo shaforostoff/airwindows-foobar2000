@@ -13,33 +13,33 @@ STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSM
 CAPTION "Dehum"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    LTEXT           "Sensitivity",IDC_STATIC,7,12,52,8
+    LTEXT           "Sensitivity",IDC_LABEL_SENSITIVITY,7,12,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_SENSITIVITY,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,9,178,15
-    RTEXT           "0.500",IDC_VALUE_SENSITIVITY,244,12,41,8
+    RTEXT           "0.500",IDC_VALUE_SENSITIVITY,244,12,41,8,SS_NOTIFY
 
-    LTEXT           "Bandwidth",IDC_STATIC,7,34,52,8
+    LTEXT           "Bandwidth",IDC_LABEL_BANDWIDTH,7,34,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_BANDWIDTH,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,31,178,15
-    RTEXT           "1.00 Hz",IDC_VALUE_BANDWIDTH,244,34,41,8
+    RTEXT           "1.00 Hz",IDC_VALUE_BANDWIDTH,244,34,41,8,SS_NOTIFY
 
-    LTEXT           "Search to",IDC_STATIC,7,56,52,8
+    LTEXT           "Search to",IDC_LABEL_SEARCHTO,7,56,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_SEARCHTO,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,53,178,15
-    RTEXT           "150 Hz",IDC_VALUE_SEARCHTO,244,56,41,8
+    RTEXT           "150 Hz",IDC_VALUE_SEARCHTO,244,56,41,8,SS_NOTIFY
 
-    LTEXT           "Harmonics",IDC_STATIC,7,78,52,8
+    LTEXT           "Harmonics",IDC_LABEL_HARMONICS,7,78,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_HARMONICS,"msctls_trackbar32",TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP,62,75,178,15
-    RTEXT           "1",IDC_VALUE_HARMONICS,244,78,41,8
+    RTEXT           "1",IDC_VALUE_HARMONICS,244,78,41,8,SS_NOTIFY
 
-    LTEXT           "Frequency",IDC_STATIC,7,100,52,8
+    LTEXT           "Frequency",IDC_LABEL_FREQUENCY,7,100,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_FREQUENCY,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,97,178,15
-    RTEXT           "auto",IDC_VALUE_FREQUENCY,244,100,41,8
+    RTEXT           "auto",IDC_VALUE_FREQUENCY,244,100,41,8,SS_NOTIFY
 
-    LTEXT           "Rumble",IDC_STATIC,7,122,52,8
+    LTEXT           "Rumble",IDC_LABEL_RUMBLE,7,122,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_RUMBLE,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,119,178,15
-    RTEXT           "40 Hz",IDC_VALUE_RUMBLE,244,122,41,8
+    RTEXT           "40 Hz",IDC_VALUE_RUMBLE,244,122,41,8,SS_NOTIFY
 
-    LTEXT           "Dry/Wet",IDC_STATIC,7,144,52,8
+    LTEXT           "Dry/Wet",IDC_LABEL_DRYWET,7,144,52,8,SS_NOTIFY
     CONTROL         "",IDC_SLIDER_DRYWET,"msctls_trackbar32",TBS_HORZ | TBS_NOTICKS | WS_TABSTOP,62,141,178,15
-    RTEXT           "1.000",IDC_VALUE_DRYWET,244,144,41,8
+    RTEXT           "1.000",IDC_VALUE_DRYWET,244,144,41,8,SS_NOTIFY
 
     LTEXT           "Finds continuous tones by itself and cancels them; it takes a few seconds of a track to decide. Frequency pins it instead, for a hum you already know. Rumble is a separate high-pass for broadband low-frequency noise, which is a different defect from hum.",
                     IDC_HINT,7,164,278,26
