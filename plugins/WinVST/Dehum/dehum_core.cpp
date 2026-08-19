@@ -370,6 +370,52 @@ void Channel::syncManual() {
 // Oscillators
 // ---------------------------------------------------------------------------
 
+// See the note on the declaration, and on acquisition at the top of the header.
+void Channel::adopt(const LineReport * lines, int count) {
+    // The user pinning a frequency outranks anything a scout thinks it found
+    if (m_cfg.manualFreq > 0.0) return;
+    if (!lines || count <= 0) return;
+
+    // The search range in Hz, so a report from a Channel configured at another
+    // sample rate - which a scout reading the file's own rate is - still lands in
+    // the right place. A line's frequency in Hz does not depend on the rate it
+    // was measured at.
+    const double binHz = m_cfg.fftSize > 0 ? m_cfg.sampleRate / (double)m_cfg.fftSize : 0.0;
+    const double lo = m_cfg.binLo * binHz;
+    const double hi = m_cfg.binHi * binHz;
+
+    for (int i = 0; i < count && m_lines < (int)kMaxLines; ++i) {
+        const double f = lines[i].frequency;
+
+        if (!(f > 0.0) || f < lo || f > hi) continue;
+
+        // Something within a notch width of it is the same line
+        bool held = false;
+        for (int k = 0; k < m_lines; ++k) {
+            if (fabs(m_line[k].detected - f) < m_cfg.halfWidth) { held = true; break; }
+        }
+        if (held) continue;
+
+        Line & L = m_line[m_lines++];
+        L = Line();
+        L.detected = f;
+        L.prom     = lines[i].prominence;
+        L.active   = true;
+        L.manual   = false;
+        L.viaCoh   = lines[i].viaCoherence;
+
+        // At the activation threshold rather than at kScoreCap: adopted on
+        // somebody else's word, so a line the evidence does not actually support
+        // is given up in about the time it took to be believed, instead of the
+        // half minute a saturated score would buy it.
+        L.score = m_cfg.scoreActivate;
+        if (L.viaCoh) L.cohScore = (double)kCohScoreActivate;
+
+        startOsc(L.osc[0], f);
+        syncHarmonics(L);
+    }
+}
+
 void Channel::startOsc(Osc & o, double freq) {
     o.freq = freq;
     o.cosPh = 1.0; o.sinPh = 0.0;

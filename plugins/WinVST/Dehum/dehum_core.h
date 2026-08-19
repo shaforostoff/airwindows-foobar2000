@@ -50,6 +50,28 @@
  *  the live sample and this core processes in place - no push/pull FIFO, unlike
  *  declick.
  *
+ *  Acquisition, though, is not free, and how long it takes is a property of the
+ *  material rather than of how the caller feeds it. The line is confirmed at a
+ *  fixed point in the stream, so pushing longer blocks does not bring it forward -
+ *  measured against a synthetic 40 dB line it lands at 2.97 s whether the caller
+ *  hands over 4 s or 20 s. What moves it is prominence and therefore which route
+ *  finds it. On 78 rpm tango transfers at 44.1 kHz, with the defaults:
+ *
+ *    - a line the prominence route can see - 19.6 dB above its local baseline -
+ *      is confirmed about 9 s in, near the floor the analysis window filling and
+ *      the evidence counter climbing set between them.
+ *
+ *    - a line sitting down in the rumble at 7.8 dB never clears the 16 dB
+ *      threshold at all, so it can only arrive by the coherence route, and that
+ *      ratio accumulates over kCohWindowSec. Confirmed about 43 s in, with a
+ *      second line on the same transfer arriving at 67 s.
+ *
+ *  Both are a long time to be playing a record with the hum still in it. A host
+ *  that has the whole file - and a file player does - can spend a scratch Channel
+ *  on the opening of it off-thread and hand the result to adopt(), which is what
+ *  that method is for. Reading the better part of a minute is what it takes to
+ *  cover the coherence case.
+ *
  *  No foobar2000, VST or Win32 dependency.
  * ======================================== */
 
@@ -386,6 +408,29 @@ public:
     //! to configure() and accept the discontinuity. Since only the sample rate
     //! sizes anything, every parameter move takes this path.
     bool retune(const Config & cfg);
+
+    //! Start from lines somebody else has already found, so a stream that begins
+    //! mid-hum does not have to spend the acquisition time over again. The
+    //! intended source is a scratch Channel run over the opening of the same
+    //! audio - see the note on acquisition at the top of this file.
+    //!
+    //! Not the same as Params::frequency, which pins one line and turns the
+    //! search off: syncManual() discards every other line and runDetector()
+    //! returns early, so nothing else is ever found. These arrive already
+    //! confirmed and the detector keeps running, so it tracks them, drops them
+    //! again if the evidence is not really there, and can still find others. It
+    //! also takes more than one, which matters: of the two reference transfers,
+    //! one carries two lines.
+    //!
+    //! Only `frequency` and `viaCoherence` are read from each report; the rest is
+    //! diagnostics. Frequencies outside the configured search range are ignored,
+    //! as are duplicates of a line already held and anything past kMaxLines.
+    //! Does nothing at all while a manual frequency is set - that is the user's
+    //! choice and it outranks a guess.
+    //!
+    //! Allocation-free, like reset() and retune(): every buffer it touches is one
+    //! the Channel already holds, so a render thread may call it.
+    void adopt(const LineReport * lines, int count);
 
     //! In place, interleaved by `stride`. Zero latency, so there is no FIFO:
     //! what goes in comes out, same count, same alignment.
