@@ -732,8 +732,10 @@ threshold eventually.
 Two consequences worth knowing:
 
 * **It takes about 5 seconds of a track to engage** — 1.5 s to fill the analysis
-  window, then ~19 hops of evidence. That is the price of the test, and it is
-  what **Frequency** is for.
+  window, then ~19 hops of evidence — and considerably longer for a line only the
+  coherence route can reach. That is the price of the test. On a file it is paid
+  off-thread before playback reaches it; see *Scouting the file before the
+  detector gets there*. Everywhere else it is what **Frequency** is for.
 * Once engaged, a line is held on much weaker evidence than it took to establish
   (6 dB lower, and a miss costs 0.25 instead of 2). Without that the line was
   acquired and dropped **ten times** over one side and removal was intermittent.
@@ -956,10 +958,71 @@ input over a whole side:
 Nothing above 125 Hz is touched. **Judge Rumble by the result, not by its
 delta**; judge the notch either way.
 
+### Scouting the file before the detector gets there
+
+Acquisition time is a property of the material, not of how the caller feeds the
+core. The line is confirmed at a fixed point in the stream, so handing over
+longer blocks does not bring it forward — measured against a synthetic 40 dB
+line it lands at 2.97 s whether the caller pushes 4 s or 20 s. What moves it is
+prominence, and therefore which route finds it. On the 78 rpm transfers, at
+44.1 kHz, with the defaults:
+
+| | prominence | confirmed at |
+| --- | --- | --- |
+| a line the prominence route can see | 19.6 dB | ~9 s |
+| a line down in the rumble | 7.8 dB | ~43 s (coherence route) |
+| a second line on the same transfer | | ~67 s |
+
+Forty-three seconds is a long time to play a record with the hum still in it,
+and the coherence case is not an edge case — it is the transfer this component
+exists for. But a file player is not obliged to wait. The whole file is on disk,
+so `dehum_scout.cpp` opens a **second decoder on a worker thread** the moment a
+track starts, reads the first **60 seconds** through a scratch `dehum::Channel`,
+and hands whatever it finds to `Channel::adopt()` on the playback thread. In
+practice that lands within a couple of seconds of the track starting — the scan
+costs about 1.5 s of one core — so removal is engaged from roughly the first
+second of audio rather than from the 43rd.
+
+A few things about it are deliberate:
+
+* **The scratch channel runs at the file's own sample rate**, which saves
+  resampling: a hum sits at the same frequency in Hz whatever rate you measure it
+  from. `adopt()` converts its search range into Hz for exactly this reason, so a
+  report from a 78 kHz transfer lands correctly in a channel running at 48.
+* **The scout downmixes to mono.** Hum is common mode, so one summed channel
+  finds it for a fraction of the work of running a detector per channel — and all
+  live channels adopt the same lines.
+* **Adopted lines arrive at the activation threshold, not saturated.** The
+  detector keeps running: it tracks them, drops them again if the evidence is not
+  really there, and can still find lines the scout missed. A line adopted on
+  somebody else's word is given up in about the time it took to believe it,
+  instead of the half minute a saturated score would buy.
+* **Nothing is ever carried between tracks.** Each record has its own hum, so the
+  channels are reset on every track change and a fresh scout is started. This is
+  also a fix in its own right: before, consecutive tracks in a playlist inherited
+  the previous record's lines.
+* **Local files only.** A stream has no opening to read ahead of, and fetching a
+  remote file a second time would not arrive before the detector got there
+  anyway.
+* **Not while Frequency is pinned.** A frequency the user set by hand outranks
+  anything found by searching, and `adopt()` refuses lines in that case regardless.
+
+When it finds something it says so once, in the console:
+
+```
+Dehum: scouted C:\...\la tablada.flac - 41.284 Hz (prominence), 78.102 Hz (coherence)
+```
+
+Only the foobar2000 component does this. The VST has no file to read — the host
+gives it a stream and nothing else — so there the acquisition time stands, which
+is what **Frequency** is for.
+
 ### What Dehum will not do
 
-* **Nothing happens for the first few seconds of a track**, for the reason
-  above. Use **Frequency** when the hum is known.
+* **Nothing happens for the first few seconds of a track** *unless* the scout
+  found the line first — which it can only do for local files, in the foobar2000
+  component, with **Frequency** on automatic. Everywhere else the acquisition
+  time above applies, and **Frequency** is the answer when the hum is known.
 * **A hum whose fundamental is weak but whose harmonics are strong** — a buzz
   rather than a hum — will not be found by searching for the fundamental. Pin it
   with **Frequency** and raise **Harmonics**.
@@ -1262,7 +1325,10 @@ foo_dsp_decrackle/
   component.cpp                   DECLARE_COMPONENT_VERSION
   foo_dsp_decrackle.rc            dialog template + version resource
 foo_dsp_declick/                  same layout, declick_core.{h,cpp} etc.
-foo_dsp_dehum/                    same layout, dehum_core.{h,cpp} etc.
+foo_dsp_dehum/                    same layout, dehum_core.{h,cpp} etc., plus
+  dehum_scout.{h,cpp}             reads the opening of the playing file on a
+                                  worker thread so the detector does not have to
+                                  find the line the slow way
 tools/
   decrackle_cli.cpp               offline WAV in / WAV out, for sweeps
   declick_cli.cpp                 ditto for the declicker

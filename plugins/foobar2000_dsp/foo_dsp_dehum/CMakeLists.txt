@@ -7,11 +7,13 @@ add_library(foo_dsp_dehum SHARED
     config_dialog.cpp
     dehum_core.cpp
     dehum_preset.cpp
+    dehum_scout.cpp
     dsp_dehum.cpp
     foo_dsp_dehum.rc
 
     dehum_core.h
     dehum_preset.h
+    dehum_scout.h
     resource.h
     stdafx.h
     version.h

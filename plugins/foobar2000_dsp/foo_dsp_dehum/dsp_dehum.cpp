@@ -4,12 +4,19 @@
  *  Much shorter than the declick wrapper, because the core has no latency and
  *  works in place: there is no FIFO, no chunk re-emission and no drain. What
  *  goes in comes out, so on_chunk edits the caller's chunk and keeps it.
+ *
+ *  The one thing it does keep track of is which track is playing, for two
+ *  reasons that pull the same way: each record carries its own hum, so nothing
+ *  learned on one may be used on the next, and a file player can read the
+ *  opening of the next one ahead of time rather than waiting for the detector
+ *  to find the line the slow way. See dehum_scout.h.
  * ======================================== */
 
 #include "stdafx.h"
 
 #include "dehum_core.h"
 #include "dehum_preset.h"
+#include "dehum_scout.h"
 #include "resource.h"
 
 #include <memory>
@@ -74,6 +81,8 @@ public:
             params = m_pending;
         }
 
+        const bool newTrack = updateTrack(params);
+
         if (channels != m_channels || rate != m_rate) {
             if (!rebuild(channels, rate, params)) return true;
         } else if (params != m_active) {
@@ -94,6 +103,20 @@ public:
             }
         }
 
+        // After the rebuild, because rebuild() would have thrown it away anyway,
+        // and before adopting, because reset() discards adopted lines too.
+        if (newTrack) {
+            for (size_t c = 0; c < m_chan.size(); ++c) m_chan[c]->reset();
+        }
+
+        if (m_scout) {
+            dehum::LineReport lines[dehum::kMaxLines];
+            const int found = m_scout->take(lines, (int)dehum::kMaxLines);
+            if (found > 0) {
+                for (size_t c = 0; c < m_chan.size(); ++c) m_chan[c]->adopt(lines, found);
+            }
+        }
+
         audio_sample * const data = chunk->get_data();
         if (data == NULL) return true;
 
@@ -108,6 +131,8 @@ public:
 
     void on_endofplayback(abort_callback &) override {
         for (size_t c = 0; c < m_chan.size(); ++c) m_chan[c]->reset();
+        m_track.release();
+        m_scout.reset();
     }
 
     void on_endoftrack(abort_callback &) override {}
@@ -124,6 +149,36 @@ public:
     bool need_track_change_mark() override { return false; }
 
 private:
+    //! Notices the track changing under us, and is the only place either half of
+    //! the per-track handling starts. Returns true on the first chunk of a new
+    //! track, which is the caller's cue to forget the previous record's hum.
+    //!
+    //! get_cur_file() is the earliest a DSP can know what it is playing - there
+    //! is no callback ahead of the audio - so the scout starts here rather than
+    //! at some tidier moment.
+    bool updateTrack(const Params & params) {
+        metadb_handle_ptr track;
+        get_cur_file(track);
+
+        if (track.get_ptr() == m_track.get_ptr()) return false;
+        m_track = track;
+
+        // Cancels and waits for the previous scout. The wait is bounded: the
+        // worker polls its abort callback per decoded chunk, and so does the I/O
+        // beneath it. Doing it here rather than leaving the thread detached is
+        // what keeps the component safe to unload.
+        m_scout.reset();
+
+        // A frequency the user pinned by hand is theirs, not ours to overwrite -
+        // and adopt() would refuse the lines anyway.
+        if (track.is_valid() && !(params.frequency > 0.0f)) {
+            const playable_location & loc = track->get_location();
+            m_scout = dehum_scout::Scout::start(loc.get_path(),
+                                                loc.get_subsong_index(), params);
+        }
+        return true;
+    }
+
     bool rebuild(unsigned channels, unsigned rate, const Params & params) {
         Config cfg;
         cfg.compute(params, (double)rate);
@@ -157,6 +212,11 @@ private:
     std::vector<std::unique_ptr<Channel> > m_chan;
     unsigned m_channels = 0;
     unsigned m_rate = 0;
+
+    //! Playback thread only, both of them: on_chunk and on_endofplayback are the
+    //! only things that touch either.
+    metadb_handle_ptr m_track;
+    std::shared_ptr<dehum_scout::Scout> m_scout;
 };
 
 static dsp_factory_t<dsp_dehum> g_dsp_dehum_factory;
