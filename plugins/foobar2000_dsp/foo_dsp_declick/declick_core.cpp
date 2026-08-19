@@ -441,7 +441,6 @@ void Channel::reset() {
     // Prime with `pad` zeros so the first real sample lands at window index
     // pad and nothing is dropped off the front of the stream.
     m_fill = m_pad;
-    m_primed = true;
 }
 
 void Channel::setUnitModel() {

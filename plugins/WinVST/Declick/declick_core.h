@@ -217,6 +217,33 @@ public:
     //! is then delayed by `latency` relative to the input, which is what a VST
     //! declares through setInitialDelay(). Mechanically the same operation as
     //! drain(); named separately because the intent is the opposite one.
+    //!
+    //! A host that can READ AHEAD does not have to pay that delay and should
+    //! not call this at all. What the repair needs is the samples that come
+    //! after the ones it is fixing, not a delay as such; a caller that can
+    //! reach them - a file player can, a live input cannot - satisfies the
+    //! model by feeding them early instead of by holding the output back:
+    //!
+    //!     while (ch.available() < n) { read n more from the source; ch.push(...); }
+    //!     ch.pull(out, n, stride);
+    //!
+    //! No arithmetic about `latency` is needed, because available() already
+    //! knows, and an underrun cannot happen because the pull only runs once
+    //! available() says it can be satisfied. Measured against this core run
+    //! over a whole file in one go, the output is then bit-identical and output
+    //! frame i is input frame i - no delay at all - at n of 64, 128, 256, 512,
+    //! 600, 1024 and 2048. It costs latency/n extra reads on the first block
+    //! and one per block after that, which leaves the source between `pad` and
+    //! `pad + kBlock` ahead of what is being heard.
+    //!
+    //! Two things the caller owes in return. The source ends up ahead, so
+    //! anything derived from its read position - elapsed time, end of stream -
+    //! runs early by that much and has to be offset; otherwise the last samples
+    //! are still in the pipeline when the stream is declared over, and the tail
+    //! is lost. And being ahead is a state to maintain, not something to do
+    //! once at the start: feed `latency` up front and then go back to n in,
+    //! n out, and the head start decays by a block per call until it arrives at
+    //! a 512-sample delay, by way of one dropout where it runs out.
     void prime() { drain(); }
 
     const Config & config() const { return m_cfg; }
@@ -283,7 +310,6 @@ private:
     size_t m_outCount = 0;         //!< samples held
 
     uint64_t m_repaired = 0, m_seen = 0;
-    bool m_primed = false;
 };
 
 //! Levinson-Durbin. `a` receives order+1 coefficients with a[0] == 1.
