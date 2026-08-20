@@ -31,7 +31,7 @@
  *      and will never touch the AEffect again, so a shim that forgets the
  *      delete leaks the whole instance. Dehum carries about two megabytes of
  *      analysis state per channel, so that is not a subtle leak - see the
- *      repeated open/close check in tests/winvst_host_verify.cpp.
+ *      repeated open/close check in tests/vst_host_verify.cpp.
  * ------------------------------------------------------------------------ */
 
 static AudioEffect * effectOf(AEffect * e)

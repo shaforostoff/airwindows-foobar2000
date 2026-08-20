@@ -168,11 +168,11 @@ if ($Win7) {
     }
 }
 
-# --- the cores are mirrored into the other formats; catch drift before we -----
-# --- build a component whose maths no longer matches the VST's ----------------
+# --- the cores and the VST wrapper are mirrored into the other formats; catch --
+# --- drift before we build a component whose maths no longer matches the VSTs' -
 Write-Host "`n=== Core sync ===" -ForegroundColor Cyan
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'sync_cores.ps1') -Check
-if ($LASTEXITCODE -ne 0) { throw "core mirrors have drifted; see above" }
+if ($LASTEXITCODE -ne 0) { throw "mirrors have drifted; see above" }
 
 # --- read each version out of version.h so archive names match the DLLs -----
 $versions = @{}

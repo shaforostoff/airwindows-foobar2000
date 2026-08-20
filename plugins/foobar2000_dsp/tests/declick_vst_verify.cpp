@@ -29,8 +29,8 @@
  *  establish. Two things this file in particular cannot tell you: that the
  *  plug-in compiles against the real SDK, and anything about the ABI, because
  *  the plug-in is linked in here rather than loaded.
- *  tests/winvst_host_verify.cpp is the other half - it loads the finished DLL
- *  through LoadLibrary and talks to it over the C ABI alone.
+ *  tests/vst_host_verify.cpp is the other half - it loads the finished plug-in
+ *  the way a host does and talks to it over the C ABI alone.
  *
  *  The shim's parameter formatter is not the SDK's, so displays are parsed for
  *  their value rather than string-compared.

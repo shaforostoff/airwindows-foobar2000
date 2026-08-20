@@ -6,7 +6,8 @@
  *  tree, and not Steinberg's header of the same name - see vst2_abi.h for why
  *  there is a reimplementation here at all.
  *
- *  The filename is not a choice: every plug-in in plugins/WinVST opens with
+ *  The filename is not a choice: every plug-in in plugins/WinVST and
+ *  plugins/LinuxVST opens with
  *
  *      #ifndef __audioeffect__
  *      #include "audioeffectx.h"
@@ -38,7 +39,7 @@
  *
  *  Anything else that differs is a bug. The tests are what say which is which:
  *  declick_vst_verify and dehum_vst_verify compile against this header
- *  directly, and winvst_host_verify loads a finished DLL and talks to it only
+ *  directly, and vst_host_verify loads a finished plug-in and talks to it only
  *  through the C ABI, so the dispatcher wiring underneath is exercised too.
  * ======================================== */
 

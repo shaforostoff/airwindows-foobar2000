@@ -1211,7 +1211,7 @@ mappings; and the preset chunk, including pinning out-of-range stored values.
 Built against `plugins/WinVST/vst2_shim`, so it needs no SDK — the same shim the
 shipped DLL links, with the caveat noted above about what that does not
 establish. What it cannot see at all is the ABI, because the plug-in is linked
-in here rather than loaded; that is `winvst_host_verify`'s job.
+in here rather than loaded; that is `vst_host_verify`'s job.
 
 **`dehum_verify`** checks the dehummer against independent references rather
 than against itself. The tonality ratio is pinned at both of its analytic
@@ -1330,9 +1330,12 @@ cmake/
   fb2k_find_runtime.cmake         locates an installed foobar2000 for the smoke test
 scripts/
   build_release.ps1               the release build + packaging entry point
+  build_winvst.ps1                the WinVST plug-ins, into ../dist/winvst
+  build_linuxvst.sh               the LinuxVST plug-ins, into ../dist/linuxvst
   check_win7.ps1                  reads a built DLL's PE headers and imports for Windows 7 compatibility
   get_sdk.ps1                     wrapper around fb2k_download_sdk.cmake
-  sync_cores.ps1                  mirrors the cores out to the other plug-in formats
+  sync_cores.ps1                  mirrors the cores and the VST wrapper out to the other plug-in formats
+  sync_cores.sh                   the same list, for machines with no PowerShell
 foo_dsp_decrackle/
   decrackle_core.{h,cpp}          the DSP (scalar + SSE2); no foobar2000 or Win32 dependency
   dsp_decrackle.cpp               the foobar2000 DSP service
@@ -1360,7 +1363,8 @@ tests/
   dehum_verify.cpp                FFT, notch, tracker and detector vs. references
   dehum_rt_verify.cpp             ditto for the dehummer's audio thread
   dehum_vst_verify.cpp            the WinVST dehummer vs. the core it shares
-  winvst_host_verify.cpp          loads a finished VST2 DLL over the C ABI alone
+  vst_host_verify.cpp             loads a finished VST2 plug-in - .dll or .so -
+                                  over the C ABI alone
   preset_roundtrip.cpp            parameters survive save/load, both components
   component_smoke.cpp             loads a DLL through the real SDK plumbing
 external/                         the downloaded SDK (git-ignored)
@@ -1368,7 +1372,7 @@ external/                         the downloaded SDK (git-ignored)
                                   (git-ignored)
 ```
 
-The VST2 shim the two `*_vst_verify` tests and the shipped DLLs all build
+The VST2 shim the two `*_vst_verify` tests and every shipped VST2 build link
 against lives with the plug-ins it serves, not here:
 
 ```
@@ -1377,8 +1381,15 @@ against lives with the plug-ins it serves, not here:
                                   that pin every offset
   audioeffectx.h                  AudioEffect / AudioEffectX
   audioeffectx.cpp                the opcode dispatcher and the C thunks
-  vstplugmain.cpp                 VSTPluginMain, the one exported symbol
+  vstplugmain.cpp                 VSTPluginMain, the one exported symbol, plus the
+                                  pre-2.4 `main` alias
 ```
+
+It is under `WinVST/` because that is the port that needed it first; the Linux
+build compiles the same four files. The ABI was fixed in 1999 by hosts that ran
+on both platforms, so only `vstplugmain.cpp` has a platform branch in it — how
+a symbol is exported, and how the `main` alias is made without a `.def` file to
+make it in.
 
 `decrackle_core.{h,cpp}` deliberately knows nothing about foobar2000, VST or
 Win32, which is what lets the test harness compare it against the original
@@ -1388,33 +1399,57 @@ source directly.
 
 ## Sharing a core with the other plug-in formats
 
-Two of the cores have a second consumer: **`plugins/WinVST/Declick`** and
-**`plugins/WinVST/Dehum`**, VST2 builds of the same algorithms. They compile
-`declick_core.{h,cpp}` and `dehum_core.{h,cpp}` — not reimplementations of them,
-and not translations. There is exactly one copy of each piece of maths in this
-repository that anything is allowed to diverge from, and it is the one under
-`foo_dsp_declick/` or `foo_dsp_dehum/`.
+Two of the cores have further consumers — VST2 builds of the same algorithms,
+for hosts on two platforms:
 
-The VST folder holds a **byte-identical copy** rather than reaching across the
-tree for this one. That is not laziness: an Airwindows WinVST folder has to
-stand on its own, because the build is "drag the plug-in's files into
-VSTProject and press build" (`plugins/AirwindowsWinVSTTemplate.txt`) and the
-folder that gets committed is the folder that was dragged. A `..\..\` include
-path would break the moment anyone followed those instructions.
+| | |
+| --- | --- |
+| `plugins/WinVST/Declick`, `plugins/WinVST/Dehum` | `.dll`, 32 and 64 bit |
+| `plugins/LinuxVST/src/Declick`, `plugins/LinuxVST/src/Dehum` | `.so` |
+
+They compile `declick_core.{h,cpp}` and `dehum_core.{h,cpp}` — not
+reimplementations of them, and not translations. There is exactly one copy of
+each piece of maths in this repository that anything is allowed to diverge from,
+and it is the one under `foo_dsp_declick/` or `foo_dsp_dehum/`.
+
+Each VST folder holds a **byte-identical copy** rather than reaching across the
+tree for it. That is not laziness: an Airwindows WinVST folder has to stand on
+its own, because the build is "drag the plug-in's files into VSTProject and
+press build" (`plugins/AirwindowsWinVSTTemplate.txt`) and the folder that gets
+committed is the folder that was dragged; `plugins/LinuxVST` keeps a folder per
+plug-in and globs it. A `..\..\` include path would break the moment anyone
+followed either set of instructions.
+
+The **wrapper** is mirrored the same way and for the same reason. `Declick.h`,
+`Declick.cpp` and `DeclickProc.cpp` are one file each, not one per platform:
+the parameter mappings, the latency reporting and the dither are things the two
+ports must not disagree about, and the only copy of them lives in
+`plugins/WinVST/Declick`. There is nothing to be canonical in `foo_dsp_*`,
+which is a foobar2000 component and has no VST wrapper at all.
 
 So the copies are mechanical and checked:
 
 ```powershell
-.\scripts\sync_cores.ps1          # push the canonical core out to every format
+.\scripts\sync_cores.ps1          # push each canonical copy out to its mirrors
 .\scripts\sync_cores.ps1 -Check   # compare only, non-zero exit on any drift
 ```
 
-`build_release.ps1` runs `-Check` before it configures anything, so a component
-whose maths no longer matches the VST's cannot be packaged. Adding a format, or a
-core, is one entry in `$mirrors`.
+```sh
+scripts/sync_cores.sh              # the same two things, without PowerShell
+scripts/sync_cores.sh --check
+```
 
-**Edit the copy in `foo_dsp_declick/`, never a mirror.** A mirror edit is not
-merged, it is overwritten.
+The two scripts hold the same mirror list and have the same exit codes, so
+either can front the other's gate — which is the point, because the Linux port
+is edited on machines that cannot run the `.ps1`. `build_release.ps1` runs
+`-Check` before it configures anything and `build_linuxvst.sh` runs `--check`
+before it compiles anything, so a build whose maths no longer matches the
+others' cannot be packaged. Adding a format is a directory in an existing
+entry's destination list, in both scripts.
+
+**Edit the canonical copy, never a mirror** — `foo_dsp_declick/` for a core,
+`WinVST/Declick/` for the wrapper. A mirror edit is not merged, it is
+overwritten.
 
 ### What the Declick VST wrapper adds, and why none of it is in the core
 
@@ -1455,10 +1490,18 @@ directly with the same `Config`, and require each VST's 64-bit output to match t
 the bit. Both report **0.000e+00**. They run on every build, on both
 architectures, and need no SDK. See [Verification](#verification).
 
+Under CMake they compile the `WinVST` copy of the wrapper, because that is the
+canonical one; the `LinuxVST` copy is required to be byte-identical to it by
+`sync_cores`, so what they establish holds for both ports or the mirror check
+fails first. `build_linuxvst.sh` builds and runs the same two sources against
+the `LinuxVST` copies anyway — this CMake project stops at a `FATAL_ERROR`
+anywhere but Windows, since what it builds is a foobar2000 component, so that
+script is the only way to run them on Linux at all.
+
 Those two link the plug-in into the test binary, which is why they can compare
 bit for bit — and also why they cannot see the ABI at all.
-**`winvst_host_verify`** is the other half: it does what a host does and nothing
-else — `LoadLibrary`, `GetProcAddress("VSTPluginMain")`, read the `AEffect`,
+**`vst_host_verify`** is the other half: it does what a host does and nothing
+else — load the module, look up `VSTPluginMain`, read the `AEffect`,
 `dispatcher(opcode)`, `processDoubleReplacing`, `effClose` — and never touches
 the plug-in's C++ classes through that path. It also links the same plug-in
 statically, drives that copy through the identical opening sequence, and requires
@@ -1466,7 +1509,11 @@ the two streams to be equal to the bit. Both copies are the same source compiled
 the same way, so any difference between them *is* the ABI, the dispatcher, the
 thunks or the calling convention: the four things nothing else here can see.
 
-`build_winvst.ps1` runs it against each DLL it produces. All four pass, worst
+One file covers both platforms. A `.dll` and a `.so` differ in how the module is
+opened and in how a process asks how much memory it is using, and in nothing
+else that matters here — which is the same fact that lets one plug-in source
+tree serve hosts on both. `build_winvst.ps1` runs it against each DLL it
+produces and `build_linuxvst.sh` against each `.so`. All six pass, worst
 deviation **0.000e+00**. Along the way it checks the things a host would notice
 and a compiler would not:
 
@@ -1478,8 +1525,8 @@ and a compiler would not:
 | `resvd1`, `resvd2`, `future[56]` | left zeroed, as the host expects |
 | the deprecated `process` | a no-op function, not a null pointer, because a host old enough to call it will not check first |
 | opcode routing | all seven parameter names arrive at the right index; displays and labels stay inside `kVstMaxParamStrLen` in a buffer bigger than promised |
-| the latency contract | Declick declares 784 samples with `effGetTailSize` matching, and calls `audioMasterIOChanged` twice for the two structural parameters; Dehum declares 0 and calls it **never** |
-| `main` | aliased to the same address as `VSTPluginMain` |
+| the latency contract | Declick declares 880 samples at 44.1 kHz with `effGetTailSize` matching, and calls `audioMasterIOChanged` twice for the two structural parameters; Dehum declares 0 and calls it **never** |
+| `main` | exported as well as `VSTPluginMain`, for hosts that predate the rename, and reaching the same plug-in when called. On Windows the `.def` makes them one address and that is asserted too; the `.so` gets a forwarder instead, because there is no `.def` to alias with |
 | `effClose` | 24 open/close cycles do not accumulate private bytes. This is a contract, not a nicety: the host frees nothing, so a shim that forgets the `delete` leaks the whole instance on every plug-in scan, and Dehum carries ~2 MB of analysis state per channel |
 
 ### Building the VST2 plug-ins
@@ -1497,6 +1544,28 @@ Both plug-ins, both architectures, into `..\dist\winvst\`:
 
 A VST2 host identifies a plug-in by its `uniqueID` rather than its filename, so
 both architectures can live in the same VST folder. Install by copying.
+
+```sh
+scripts/build_linuxvst.sh
+```
+
+Both plug-ins into `../dist/linuxvst/`, as `Declick.so` and `Dehum.so` — the
+names `plugins/LinuxVST/CMakeLists.txt` would give them. Copy them where your
+host looks; `~/.vst` is the usual place. It checks the mirrors first, then runs
+`declick_vst_verify`, `dehum_vst_verify` and `vst_host_verify` over what it
+produced, so nothing ships from here unverified either. `CXX` and `OUTDIR` are honoured, so
+`CXX="g++ -m32" OUTDIR=... scripts/build_linuxvst.sh` builds a 32-bit plug-in on
+a machine with multilib installed. Two flags this one adds over the Windows
+build, both about being loaded by somebody else's program:
+
+* **only two symbols are exported**, `VSTPluginMain` and `main`, via
+  `-fvisibility=hidden` and a version script. Some hosts `dlopen` with
+  `RTLD_GLOBAL`, and one that does would otherwise get the plug-in's whole C++
+  surface in its global namespace.
+* **`-static-libstdc++ -static-libgcc`**, which is the same call `/MT` makes on
+  Windows. A plug-in linked against the build machine's libstdc++ refuses to
+  load on a distribution with an older one, and the user's host is where they
+  would find that out.
 
 Steinberg's `vst2.x` sources are not redistributable and are not here —
 `plugins/AirwindowsWinVSTTemplate.txt` says so and adds "so you're on your own".
@@ -1516,6 +1585,13 @@ so `build_winvst.ps1` drives `cl.exe` directly and the `.vcxproj`, `.sln` and
 folder into VSTProject and press build" route still works for anyone who does
 have the real SDK.
 
+`build_linuxvst.sh` avoids `plugins/LinuxVST/CMakeLists.txt` for the same
+reason. That project builds all five hundred plug-ins and wants Steinberg's
+sources in `LinuxVST/include/vstsdk`, so it is left alone and keeps working for
+anyone who has them — including for these two, which are registered in it with
+`add_airwindows_plugin(Declick)` and `add_airwindows_plugin(Dehum)` like every
+other plug-in there.
+
 #### The part to be suspicious of
 
 An ABI is not an interface you get to design. Every byte offset in `AEffect` and
@@ -1530,7 +1606,7 @@ things push back:
 * **The opcode enums keep their deprecated entries.** `effGetVu` is unused and
   deleting it would silently move the ten opcodes after it. The values the
   plug-ins depend on are additionally asserted as literals.
-* **`winvst_host_verify` loads the finished DLL** — see below.
+* **`vst_host_verify` loads the finished plug-in** — see above.
 
 What none of that proves is that 144 and 192 and `effGetChunk == 23` are
 themselves right, because the shim and its test read the same header and so agree

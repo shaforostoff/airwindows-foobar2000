@@ -1,5 +1,5 @@
 /* ========================================
- *  winvst_host_verify - a host, loading the finished DLL.
+ *  vst_host_verify - a host, loading the finished plug-in.
  *
  *  Every other test in this directory links the plug-in's source straight into
  *  the test binary. That checks the DSP and the parameter mapping, and it
@@ -10,17 +10,25 @@
  *
  *  So this test is the other side. It does what a host does and nothing else:
  *
- *      LoadLibrary -> GetProcAddress("VSTPluginMain") -> call it
+ *      load the module -> look up "VSTPluginMain" -> call it
  *      -> read the AEffect -> dispatcher(opcodes) -> processDoubleReplacing
  *      -> effClose
  *
  *  and it never touches the plug-in's C++ classes through that path. It also
  *  links the same plug-in statically, drives that copy through the identical
  *  call sequence, and requires the two output streams to be equal to the bit.
- *  That comparison is the point of the file: the static copy and the DLL copy
- *  are the same source compiled the same way, so any difference between them is
- *  the ABI, the dispatcher, the thunks or the calling convention - the four
- *  things nothing else here can see.
+ *  That comparison is the point of the file: the static copy and the loaded
+ *  copy are the same source compiled the same way, so any difference between
+ *  them is the ABI, the dispatcher, the thunks or the calling convention - the
+ *  four things nothing else here can see.
+ *
+ *  Both ports are checked by this one file. A .dll and a .so differ in how the
+ *  module is opened and in how the process asks how much memory it is using,
+ *  and in nothing else that matters here: the AEffect layout, the opcode
+ *  numbers and the calling convention are the same on both, which is the whole
+ *  reason a VST2 written once loads in hosts on either platform. Those two
+ *  differences are the platform block below; the rest of the file does not
+ *  know which one it is running on.
  *
  *  What it still cannot establish: that plugins/WinVST/vst2_shim agrees with
  *  Steinberg's headers, because the shim and this test read the same
@@ -32,14 +40,19 @@
  *  Built once per plug-in, since two plug-ins in one binary would collide on
  *  createEffectInstance and on kNumParameters:
  *
- *      cl /D WINVST_DEHUM   ... winvst_host_verify.cpp Dehum.cpp   ...
- *      cl /D WINVST_DECLICK ... winvst_host_verify.cpp Declick.cpp ...
+ *      cl  /D VST_PLUGIN_DEHUM   ... vst_host_verify.cpp Dehum.cpp   ...
+ *      g++ -D VST_PLUGIN_DECLICK ... vst_host_verify.cpp Declick.cpp ...
  *
- *  Usage: winvst_host_verify <path-to-dll>
+ *  Usage: vst_host_verify <path-to-the-plug-in-module>
  * ======================================== */
 
-#include <windows.h>
-#include <psapi.h>
+#if defined(_WIN32)
+  #include <windows.h>
+  #include <psapi.h>
+#else
+  #include <dlfcn.h>
+  #include <unistd.h>
+#endif
 
 #include <math.h>
 #include <stdio.h>
@@ -48,7 +61,7 @@
 
 #include <vector>
 
-#if defined(WINVST_DEHUM)
+#if defined(VST_PLUGIN_DEHUM)
   #include "Dehum.h"
   typedef Dehum Plugin;
   static const char * kPluginName    = "Dehum";
@@ -56,7 +69,7 @@
   static const bool   kZeroLatency   = true;
   static const char * kParamNames[7] =
       { "Sensitv", "Bandwid", "SrchTo", "Harmncs", "Freq", "Rumble", "Dry/Wet" };
-#elif defined(WINVST_DECLICK)
+#elif defined(VST_PLUGIN_DECLICK)
   #include "Declick.h"
   typedef Declick Plugin;
   static const char * kPluginName    = "Declick";
@@ -65,7 +78,7 @@
   static const char * kParamNames[7] =
       { "Sensitv", "Extent", "MaxLen", "Depth", "Passes", "Order", "Dry/Wet" };
 #else
-  #error define WINVST_DEHUM or WINVST_DECLICK
+  #error define VST_PLUGIN_DEHUM or VST_PLUGIN_DECLICK
 #endif
 
 namespace {
@@ -165,8 +178,8 @@ double rmsDiff(const std::vector<double> & a, const std::vector<double> & b) {
     return n ? sqrt(s / (double)n) : 0.0;
 }
 
-/*  The same opening sequence a host performs, so the DLL copy and the static
- *  copy start from identical state. Order matters: rate before block size
+/*  The same opening sequence a host performs, so the loaded copy and the
+ *  static copy start from identical state. Order matters: rate before block size
  *  before resume, because resume() is where each plug-in decides what to keep. */
 void openThroughAbi(AEffect * e) {
     send(e, effOpen);
@@ -220,6 +233,25 @@ void runStatically(Plugin & fx, const std::vector<double> & inL,
     }
 }
 
+/* ---------------------------------------------------------------------------
+ *  The platform block. Opening a module, finding a symbol in it, and asking how
+ *  much memory this process is using are the only three things this test does
+ *  that a .dll and a .so do not do the same way.
+ * ------------------------------------------------------------------------ */
+
+#if defined(_WIN32)
+
+typedef HMODULE ModuleHandle;
+
+ModuleHandle moduleOpen(const char * path) { return LoadLibraryA(path); }
+
+void * moduleSymbol(ModuleHandle m, const char * name)
+{ return (void *)GetProcAddress(m, name); }
+
+void moduleOpenError(char * out, size_t n)
+{ snprintf(out, n, "LoadLibrary failed, error %lu", (unsigned long)GetLastError()); }
+
+//! Committed private bytes: what this process has taken and not given back.
 size_t privateBytes() {
     PROCESS_MEMORY_COUNTERS_EX pmc;
     memset(&pmc, 0, sizeof pmc);
@@ -229,34 +261,91 @@ size_t privateBytes() {
     return (size_t)pmc.PrivateUsage;
 }
 
+#else
+
+typedef void * ModuleHandle;
+
+/*  RTLD_NOW, so an unresolved symbol is a failed load here rather than a crash
+ *  in the middle of a process() call later. RTLD_LOCAL is the default and is
+ *  named for the reader: nothing the plug-in defines is allowed to interpose on
+ *  this process, which is also what makes looking up "main" below safe - it
+ *  finds the module's own, not this test binary's.
+ *
+ *  A path with no slash in it is a library name to dlopen, searched for on the
+ *  library path rather than in the current directory, so one is added if the
+ *  caller did not. */
+ModuleHandle moduleOpen(const char * path) {
+    if (strchr(path, '/')) return dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    char here[1024];
+    snprintf(here, sizeof here, "./%s", path);
+    return dlopen(here, RTLD_NOW | RTLD_LOCAL);
+}
+
+void * moduleSymbol(ModuleHandle m, const char * name) { return dlsym(m, name); }
+
+void moduleOpenError(char * out, size_t n) {
+    const char * why = dlerror();
+    snprintf(out, n, "dlopen failed: %s", why ? why : "(no message)");
+}
+
+//! Resident set size. Not the same quantity as Windows' private bytes, but the
+//! test below is a difference of two readings taken seconds apart in one
+//! process, and for that it answers the same question: did the memory the
+//! instances took come back.
+size_t privateBytes() {
+    FILE * f = fopen("/proc/self/statm", "r");
+    if (!f) return 0;
+    unsigned long total = 0, resident = 0;
+    const int got = fscanf(f, "%lu %lu", &total, &resident);
+    fclose(f);
+    if (got != 2) return 0;
+    const long page = sysconf(_SC_PAGESIZE);
+    return (size_t)resident * (size_t)(page > 0 ? page : 4096);
+}
+
+#endif
+
 // ---------------------------------------------------------------------------
 
 typedef AEffect * (*VSTPluginMainProc)(audioMasterCallback);
 
-HMODULE       g_dll  = 0;
-VSTPluginMainProc g_entry = 0;
+ModuleHandle      g_module = 0;
+VSTPluginMainProc g_entry  = 0;
 
 void testItLoads(const char * path) {
-    printf("\nthe DLL, as a host sees it\n");
+    printf("\nthe module, as a host sees it\n");
 
-    g_dll = LoadLibraryA(path);
+    g_module = moduleOpen(path);
     char d[512];
-    if (!g_dll) {
-        snprintf(d, sizeof d, "LoadLibrary failed, error %lu", (unsigned long)GetLastError());
-        check(false, "the DLL loads", d);
+    if (!g_module) {
+        moduleOpenError(d, sizeof d);
+        check(false, "the plug-in loads", d);
         return;
     }
     snprintf(d, sizeof d, "%s", path);
-    check(true, "the DLL loads", d);
+    check(true, "the plug-in loads", d);
 
-    g_entry = (VSTPluginMainProc)GetProcAddress(g_dll, "VSTPluginMain");
+    g_entry = (VSTPluginMainProc)moduleSymbol(g_module, "VSTPluginMain");
     check(g_entry != 0, "it exports VSTPluginMain");
 
-    /*  The .def file aliases "main" to the same function for hosts that predate
-     *  the rename. Same address, or the alias is not doing its job. */
-    FARPROC legacy = GetProcAddress(g_dll, "main");
-    check(legacy != 0 && (void *)legacy == (void *)g_entry,
-          "and aliases main to the same address");
+    /*  "main" is the pre-2.4 name for the same entry point and hosts old enough
+     *  to look for it are still in use. On Windows the plug-in's .def aliases
+     *  the two names to one function, so they are literally the same address;
+     *  an .so has no .def and gets a forwarder with its assembler name set
+     *  instead, which is a different address arriving at the same place. So
+     *  what is asserted for both is that it arrives - by calling it. */
+    void * legacy = moduleSymbol(g_module, "main");
+    check(legacy != 0, "and exports main too, for hosts that predate the rename");
+#if defined(_WIN32)
+    check(legacy == (void *)g_entry, "which the .def file aliases to the same address");
+#endif
+    if (legacy) {
+        AEffect * viaLegacy = ((VSTPluginMainProc)legacy)(hostCallback);
+        check(viaLegacy != 0 && viaLegacy->magic == kEffectMagic
+              && viaLegacy->uniqueID == (VstInt32)kUniqueId,
+              "and it reaches this plug-in");
+        if (viaLegacy) send(viaLegacy, effClose);
+    }
 }
 
 void testTheAEffect(AEffect * e) {
@@ -431,13 +520,13 @@ void testTheChunk(AEffect * e) {
           "effGetChunk returns one float per parameter", d);
     if (!blob || size <= 0) return;
 
-    /*  Copy it out immediately. The blob was allocated by the DLL's own CRT
-     *  heap - these plug-ins are built /MT, so each module has its own - and
-     *  freeing it here would be a crash rather than a leak. VST2 says the
-     *  plug-in owns chunk memory; the Airwindows pattern never frees it, so a
-     *  host that saves a session repeatedly leaks 28 bytes a time. Upstream
-     *  behaviour, left alone deliberately, noted here so it is not mistaken
-     *  for this test's doing. */
+    /*  Copy it out immediately. The blob was allocated by the module's own
+     *  allocator - the Windows builds are /MT, so each of those has its own
+     *  heap - and freeing it here would be a crash rather than a leak. VST2
+     *  says the plug-in owns chunk memory; the Airwindows pattern never frees
+     *  it, so a host that saves a session repeatedly leaks 28 bytes a time.
+     *  Upstream behaviour, left alone deliberately, noted here so it is not
+     *  mistaken for this test's doing. */
     std::vector<unsigned char> saved((size_t)size);
     memcpy(&saved[0], blob, (size_t)size);
 
@@ -454,7 +543,8 @@ void testTheChunk(AEffect * e) {
     check(restored, "effSetChunk puts every parameter back");
 }
 
-//! The one that can only be seen from here: is the DLL the same plug-in?
+//! The one that can only be seen from here: is the loaded module the same
+//! plug-in as the source in this test binary?
 void testAudioMatchesTheStaticBuild(const std::vector<double> & inL,
                                     const std::vector<double> & inR) {
     printf("\naudio through the ABI vs the same source linked in\n");
@@ -467,8 +557,8 @@ void testAudioMatchesTheStaticBuild(const std::vector<double> & inL,
     if (!e) { check(false, "a fresh instance is created"); return; }
     openThroughAbi(e);
 
-    std::vector<double> dllL, dllR;
-    runThroughAbi(e, inL, inR, dllL, dllR, kBlock);
+    std::vector<double> abiL, abiR;
+    runThroughAbi(e, inL, inR, abiL, abiR, kBlock);
 
     Plugin fx(hostCallback);
     openStatically(fx);
@@ -476,13 +566,13 @@ void testAudioMatchesTheStaticBuild(const std::vector<double> & inL,
     runStatically(fx, inL, inR, refL, refR, kBlock);
 
     char d[112];
-    const double w = worstDiff(dllL, refL) + worstDiff(dllR, refR);
+    const double w = worstDiff(abiL, refL) + worstDiff(abiR, refR);
     snprintf(d, sizeof d, "worst deviation %.3e", w);
-    check(w == 0.0, "the DLL's double path is identical to the bit", d);
+    check(w == 0.0, "the loaded module's double path is identical to the bit", d);
 
     /*  Guards against the way this check could pass for the wrong reason: two
      *  copies that both hand the input straight back would also be identical. */
-    const double moved = rmsDiff(dllL, inL);
+    const double moved = rmsDiff(abiL, inL);
     snprintf(d, sizeof d, "rms difference from input %.3e", moved);
     check(moved > 1.0e-4, "and both of them actually processed the signal", d);
 
@@ -628,10 +718,10 @@ void testIoChangedContract() {
 } // anonymous namespace
 
 int main(int argc, char ** argv) {
-    printf("winvst_host_verify: %s\n", kPluginName);
+    printf("vst_host_verify: %s\n", kPluginName);
 
     if (argc < 2) {
-        printf("\nusage: winvst_host_verify <path-to-dll>\n");
+        printf("\nusage: vst_host_verify <path to the plug-in module>\n");
         return 2;
     }
 

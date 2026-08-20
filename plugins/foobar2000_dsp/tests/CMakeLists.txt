@@ -16,10 +16,15 @@
 #                        runs on the audio thread. No SDK.
 #   dehum_vst_verify   - the WinVST port of the dehummer vs. the core it shares.
 #                        No SDK.
-#   winvst_host_verify - NOT a target here. It loads a finished VST2 DLL through
-#                        LoadLibrary and the C ABI, so it needs a built DLL to
-#                        point at; scripts\build_winvst.ps1 compiles and runs it
-#                        against each one it produces.
+#                        These two are Windows targets only because this project
+#                        is; scripts/build_linuxvst.sh builds and runs the same
+#                        two sources against the LinuxVST copies, which are
+#                        required to be byte-identical.
+#   vst_host_verify    - NOT a target here. It loads a finished VST2 plug-in and
+#                        drives it over the C ABI, so it needs a built one to
+#                        point at; scripts\build_winvst.ps1 and
+#                        scripts/build_linuxvst.sh each compile and run it
+#                        against every plug-in they produce.
 #   preset_roundtrip   - every parameter survives save/load. Links the SDK, so
 #                        it needs foobar2000's shared.dll; skips if absent.
 #   component_smoke    - loads the built DLL through foobar2000's own service
@@ -139,7 +144,7 @@ set_target_properties(dehum_rt_verify PROPERTIES FOLDER "tests")
 # is compiled here is what ships. Two things it cannot establish: that the
 # plug-in compiles against the real SDK, and anything about the ABI itself, since
 # this test links the plug-in rather than loading it. The second gap is what
-# winvst_host_verify.cpp closes; see plugins/WinVST/vst2_shim/README.md.
+# vst_host_verify.cpp closes; see plugins/WinVST/vst2_shim/README.md.
 
 set(WINVST_SHIM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../WinVST/vst2_shim")
 set(WINVST_DECLICK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../WinVST/Declick")

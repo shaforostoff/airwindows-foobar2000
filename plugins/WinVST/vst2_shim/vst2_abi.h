@@ -35,8 +35,8 @@
  *        ones the plug-ins actually depend on are asserted at the bottom.
  *
  *  What the assertions cannot do is prove that 144 and 192 and effGetChunk==23
- *  are themselves right; for that, see tests/winvst_host_verify.cpp, which
- *  loads a finished DLL and drives it through this ABI and nothing else, and
+ *  are themselves right; for that, see tests/vst_host_verify.cpp, which loads
+ *  a finished plug-in and drives it through this ABI and nothing else, and
  *  ultimately a real host. They do stop the numbers from drifting once set.
  * ======================================== */
 

@@ -27,9 +27,10 @@
     that is and, more to the point, what it does not prove.
 
     Unless -SkipTests is given, each finished DLL is then handed to
-    tests/winvst_host_verify.cpp, which loads it the way a host does - through
+    tests/vst_host_verify.cpp, which loads it the way a host does - through
     LoadLibrary and the C ABI and nothing else - and requires its audio to match
-    the same plug-in linked statically, to the bit.
+    the same plug-in linked statically, to the bit. That test is shared with
+    scripts/build_linuxvst.sh, which does the same for the LinuxVST ports.
 
 .PARAMETER Plugin
     Which plug-ins to build. Default: both.
@@ -271,9 +272,9 @@ try {
                 if (-not (Test-Path $testObjDir)) {
                     New-Item -ItemType Directory -Force $testObjDir | Out-Null
                 }
-                $testExe = Join-Path $testObjDir ("winvst_host_verify_{0}{1}.exe" -f $p, $suffix)
+                $testExe = Join-Path $testObjDir ("vst_host_verify_{0}{1}.exe" -f $p, $suffix)
                 $testSources = @(
-                    (Join-Path $testsDir 'winvst_host_verify.cpp'),
+                    (Join-Path $testsDir 'vst_host_verify.cpp'),
                     (Join-Path $shimDir 'audioeffectx.cpp'),
                     (Join-Path $pluginDir "$p.cpp"),
                     (Join-Path $pluginDir "${p}Proc.cpp"),
@@ -283,18 +284,18 @@ try {
                 # so it must not also pull in vstplugmain.cpp - two definitions of
                 # the entry point, and nothing here needs an exported one
                 $testArgs = $commonFlags + $archFlags + $commonDefines +
-                            @('/D', ('WINVST_' + $p.ToUpper()),
+                            @('/D', ('VST_PLUGIN_' + $p.ToUpper()),
                               '/I', $shimDir, '/I', $pluginDir,
                               ('/Fo' + $testObjDir + '\')) + $testSources
                 $totalWarnings += Invoke-Native -Exe 'cl' -Arguments $testArgs `
-                    -What "compiling winvst_host_verify for $p ($a)"
+                    -What "compiling vst_host_verify for $p ($a)"
 
                 $testObjs = @(Get-ChildItem (Join-Path $testObjDir '*.obj') |
                               Select-Object -ExpandProperty FullName)
                 $testLink = @('/nologo', '/INCREMENTAL:NO', ('/OUT:' + $testExe),
                               'psapi.lib') + $testObjs
                 $totalWarnings += Invoke-Native -Exe 'link' -Arguments $testLink `
-                    -What "linking winvst_host_verify for $p ($a)"
+                    -What "linking vst_host_verify for $p ($a)"
 
                 Write-Host ""
                 $saved = $ErrorActionPreference
@@ -303,7 +304,7 @@ try {
                     & $testExe $dll
                     $testCode = $LASTEXITCODE
                 } finally { $ErrorActionPreference = $saved }
-                if ($testCode -ne 0) { throw ("winvst_host_verify failed for {0} ({1})" -f $p, $a) }
+                if ($testCode -ne 0) { throw ("vst_host_verify failed for {0} ({1})" -f $p, $a) }
                 $testResult = 'passed'
             }
 
