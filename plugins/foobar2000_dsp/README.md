@@ -1256,6 +1256,40 @@ double path plus dither to within a float ULP; hostile input; dry/wet 0 as a
 bit-exact bypass; the slider mappings against `Params::defaults()`, including the
 off positions on Freq and Rumble; and the preset chunk.
 
+**`declick_au_verify`** and **`dehum_au_verify`** do the same job for the MacAU
+ports — see [Sharing a core with the other plug-in
+formats](#sharing-a-core-with-the-other-plug-in-formats). An Audio Unit renders
+into 32-bit float and the house dither is on the way out, so there is no
+undithered path to compare and the requirement is the core driven directly to
+within **two ULP** rather than to the bit: measured **1.36 ULP** worst for the
+declicker and **1.41 ULP** for the dehummer. What that still catches is any
+difference that is not rounding, and the gross ones cannot hide in a ULP — a
+wrong pre-roll makes the core zero-fill mid-stream. Around it, the things an AU
+has to get right that a VST does not:
+
+* `GetLatency()` and `GetTailTime()` are **seconds**, not samples, and both have
+  to come back out as `cfg.latency` at the rate in force — 880 samples at the
+  shipping default, 784 after dropping to order 32, 1088 at 96 kHz;
+* `PropertyChanged(kAudioUnitProperty_Latency)` is what an AU says instead of
+  `audioMasterIOChanged`, so it must fire **exactly once** for Max repair or
+  Model order and **never** for the other five, for Dehum's seven, or across a
+  sample rate change;
+* `Reset()` is where `resume()` went, with the same split: Declick starts the
+  next take from silence, Dehum keeps what the detector learned (hum still
+  **44.5 dB** down within 2 s of it);
+* `kAudioUnitRenderAction_OutputIsSilence` has to be **cleared**, or a host that
+  trusts it clips the tail of the pipeline off every gap;
+* a host may hand the same buffer in and out, so both are run in place as well.
+
+Plus what the host is told about the controls: seven parameters, named, in the
+VST's order, all 0..1, readable and writable, with the advertised default equal
+to the one the constructor actually set — the classic template slip — and a bad
+index or a non-global scope refused. Both are built against
+`plugins/MacAU/au_shim` and need no SDK. Read that folder's
+[README](../MacAU/au_shim/README.md) first: unlike `vst2_shim` it is **not an
+ABI**, nothing loads it, and **these two plug-ins have not been opened by a real
+host**.
+
 **`preset_roundtrip`** saves each component's parameters to a `dsp_preset` and
 reads them back, checking every field individually with values chosen so that a
 field read out of position cannot pass by accident. It also covers the
@@ -1363,6 +1397,8 @@ tests/
   dehum_verify.cpp                FFT, notch, tracker and detector vs. references
   dehum_rt_verify.cpp             ditto for the dehummer's audio thread
   dehum_vst_verify.cpp            the WinVST dehummer vs. the core it shares
+  declick_au_verify.cpp           the MacAU declicker vs. the core it shares
+  dehum_au_verify.cpp             the MacAU dehummer vs. the core it shares
   vst_host_verify.cpp             loads a finished VST2 plug-in - .dll or .so -
                                   over the C ABI alone
   preset_roundtrip.cpp            parameters survive save/load, both components
@@ -1391,6 +1427,17 @@ on both platforms, so only `vstplugmain.cpp` has a platform branch in it — how
 a symbol is exported, and how the `main` alias is made without a `.def` file to
 make it in.
 
+The stand-in the two `*_au_verify` tests build against lives with its plug-ins
+too, and exists for the same reason — Apple's CoreAudio sources are not
+redistributable either:
+
+```
+../MacAU/au_shim/
+  AUEffectBase.h                  AUBase / AUEffectBase, the CoreAudio types the
+                                  two plug-ins name, and COMPONENT_ENTRY
+  README.md                       what it is not: an ABI, or a real host
+```
+
 `decrackle_core.{h,cpp}` deliberately knows nothing about foobar2000, VST or
 Win32, which is what lets the test harness compare it against the original
 source directly.
@@ -1399,33 +1446,40 @@ source directly.
 
 ## Sharing a core with the other plug-in formats
 
-Two of the cores have further consumers — VST2 builds of the same algorithms,
-for hosts on two platforms:
+Two of the cores have further consumers — builds of the same algorithms for
+hosts on three platforms, in two plug-in formats:
 
 | | |
 | --- | --- |
-| `plugins/WinVST/Declick`, `plugins/WinVST/Dehum` | `.dll`, 32 and 64 bit |
-| `plugins/LinuxVST/src/Declick`, `plugins/LinuxVST/src/Dehum` | `.so` |
+| `plugins/WinVST/Declick`, `plugins/WinVST/Dehum` | VST2, `.dll`, 32 and 64 bit |
+| `plugins/LinuxVST/src/Declick`, `plugins/LinuxVST/src/Dehum` | VST2, `.so` |
+| `plugins/MacVST/Declick`, `plugins/MacVST/Dehum` | VST2, `.vst` bundle |
+| `plugins/MacAU/Declick`, `plugins/MacAU/Dehum` | Audio Unit, `.component` |
 
-They compile `declick_core.{h,cpp}` and `dehum_core.{h,cpp}` — not
+They all compile `declick_core.{h,cpp}` and `dehum_core.{h,cpp}` — not
 reimplementations of them, and not translations. There is exactly one copy of
 each piece of maths in this repository that anything is allowed to diverge from,
 and it is the one under `foo_dsp_declick/` or `foo_dsp_dehum/`.
 
-Each VST folder holds a **byte-identical copy** rather than reaching across the
-tree for it. That is not laziness: an Airwindows WinVST folder has to stand on
-its own, because the build is "drag the plug-in's files into VSTProject and
+Each plug-in folder holds a **byte-identical copy** rather than reaching across
+the tree for it. That is not laziness: an Airwindows WinVST folder has to stand
+on its own, because the build is "drag the plug-in's files into VSTProject and
 press build" (`plugins/AirwindowsWinVSTTemplate.txt`) and the folder that gets
 committed is the folder that was dragged; `plugins/LinuxVST` keeps a folder per
-plug-in and globs it. A `..\..\` include path would break the moment anyone
-followed either set of instructions.
+plug-in and globs it; and `plugins/AirwindowsMacVSTTemplate.txt` opens with
+"option-drag the 'VSTMaster' folder to create a copy of it". A `..\..\` include
+path would break the moment anyone followed any of those instructions.
 
 The **wrapper** is mirrored the same way and for the same reason. `Declick.h`,
 `Declick.cpp` and `DeclickProc.cpp` are one file each, not one per platform:
-the parameter mappings, the latency reporting and the dither are things the two
-ports must not disagree about, and the only copy of them lives in
+the parameter mappings, the latency reporting and the dither are things the
+three VST2 ports must not disagree about, and the only copy of them lives in
 `plugins/WinVST/Declick`. There is nothing to be canonical in `foo_dsp_*`,
 which is a foobar2000 component and has no VST wrapper at all.
+
+`plugins/MacAU` takes the cores and not the wrapper. An Audio Unit is a
+different interface, so its `.cpp` is a wrapper in its own right rather than a
+copy of anybody's — see [The Mac ports](#the-mac-ports).
 
 So the copies are mechanical and checked:
 
@@ -1440,8 +1494,8 @@ scripts/sync_cores.sh --check
 ```
 
 The two scripts hold the same mirror list and have the same exit codes, so
-either can front the other's gate — which is the point, because the Linux port
-is edited on machines that cannot run the `.ps1`. `build_release.ps1` runs
+either can front the other's gate — which is the point, because the Linux and
+Mac ports are edited on machines that cannot run the `.ps1`. `build_release.ps1` runs
 `-Check` before it configures anything and `build_linuxvst.sh` runs `--check`
 before it compiles anything, so a build whose maths no longer matches the
 others' cannot be packaged. Adding a format is a directory in an existing
@@ -1481,6 +1535,52 @@ so it is part of the numerical contract rather than an optimisation, and two
 ports that disagree about it are not comparable. It is now
 `declick::scoped_flush_denormals` and both wrappers hold one.
 
+### The Mac ports
+
+**`plugins/MacVST` is the same wrapper**, mirrored from `WinVST` by
+`sync_cores` exactly as `LinuxVST` is — the wrapper section above covers all
+three. That is also how the rest of the tree does it: the 518 stock plug-ins
+keep byte-identical VST sources in the two folders and differ only in the
+project files, which is the whole of what a MacVST port *is*. So there is
+nothing to describe here that the sections above have not, and nothing to test
+separately: `declick_vst_verify` and `dehum_vst_verify` are already compiling
+that code, or the mirror check fails first.
+
+**`plugins/MacAU` is a different wrapper**, because an Audio Unit is a different
+interface. Same seven sliders, same mappings, same defaults, same core, same
+dither — the differences are all in how the host is talked to:
+
+| | |
+| --- | --- |
+| **`GetLatency()`, `GetTailTime()`** | Seconds, not samples, so both are `(1.0/GetSampleRate())*cfg.latency` and Airwindows' house `*0.0` for Dehum. There is no `setInitialDelay()`: the host asks. |
+| **`PropertyChanged(kAudioUnitProperty_Latency)`** | The AU's `ioChanged()`. Declick calls it when Max repair or Model order resizes the pipeline; Dehum never calls it at all. |
+| **`Reset()`** | Where `resume()` went. Declick starts the next take from silence, Dehum flushes and keeps the lines — the same split as the VST, at a different entry point. |
+| **`Initialize()`** | The one thing an AU makes *easier*. It is told its sample rate before it renders, which a VST is not, so the reallocation a rate change forces happens here instead of on the first render call. |
+| **`kAudioUnitRenderAction_OutputIsSilence`** | Cleared by both. Declick holds `cfg.latency` samples of pipeline and Dehum's notches are integrators that ring on into a gap, so silence in is not silence out for either, and a host that trusts the flag would clip that off. |
+| **No `getChunk`/`setChunk`** | An AU's parameters *are* its state; the host serialises them. So there is no preset chunk to get wrong, and no equivalent of the VST tests' chunk round trip. |
+| **No `getParameterDisplay`** | The cost of keeping every slider generic 0..1 like the other 540 AUs in the tree — and of keeping the two formats interchangeable, since `paramsFromControls()` is then the VST's unchanged. Max repair reads `0.2` in an AU host rather than `4.0 ms`. The mapping tables in [Declick parameters](#declick-parameters) and [Dehum parameters](#dehum-parameters) are what to read it against. |
+
+Two things to know about building them.
+
+The `.xcodeproj` files are the Airwindows templates, cloned from the DeCrackle
+folders next to them and left alone otherwise, so the documented route still
+works for anyone who has the toolchain they expect. One setting is added to each:
+`CLANG_CXX_LANGUAGE_STANDARD = "c++11"`. The cores use `= delete` and default
+member initialisers, and the templates target the gcc 4.2 that came with
+Xcode 3.2.6, which has neither. A newer Xcode honours the setting; Xcode 3
+ignores it, and cannot build these two plug-ins.
+
+The Audio Unit projects also reach for Apple's CoreAudio `AUPublic` and
+`PublicUtility` sources under `$(SYSTEM_DEVELOPER_DIR)`, where no Xcode has put
+them for over a decade. Those are not redistributable and are not here, which is
+the same hole `plugins/WinVST/vst2_shim` fills on the Windows side;
+`plugins/MacAU/au_shim` fills enough of it to compile the wrappers and drive
+them from a test. It is **not** an ABI and nothing loads it, so unlike the VST2
+side there is no `vst_host_verify` equivalent and **these two Audio Units have
+not been opened by a real host**. Read that folder's
+[README](../MacAU/au_shim/README.md) before trusting anything about them beyond
+their DSP.
+
 ### Checking that they agree
 
 `processDoubleReplacing` is left undithered — that is the standard Airwindows
@@ -1491,12 +1591,21 @@ the bit. Both report **0.000e+00**. They run on every build, on both
 architectures, and need no SDK. See [Verification](#verification).
 
 Under CMake they compile the `WinVST` copy of the wrapper, because that is the
-canonical one; the `LinuxVST` copy is required to be byte-identical to it by
-`sync_cores`, so what they establish holds for both ports or the mirror check
-fails first. `build_linuxvst.sh` builds and runs the same two sources against
-the `LinuxVST` copies anyway — this CMake project stops at a `FATAL_ERROR`
-anywhere but Windows, since what it builds is a foobar2000 component, so that
-script is the only way to run them on Linux at all.
+canonical one; the `LinuxVST` and `MacVST` copies are required to be
+byte-identical to it by `sync_cores`, so what they establish holds for all three
+ports or the mirror check fails first. `build_linuxvst.sh` builds and runs the
+same two sources against the `LinuxVST` copies anyway — this CMake project stops
+at a `FATAL_ERROR` anywhere but Windows, since what it builds is a foobar2000
+component, so that script is the only way to run them on Linux at all.
+
+**`declick_au_verify`** and **`dehum_au_verify`** do the same job for the Audio
+Units, which are not mirrors of that wrapper and so need testing in their own
+right. One concession: an AU has only a float path, so the requirement is two ULP
+rather than the bit. Worst measured **1.36** and **1.41 ULP**. They also carry
+the AU-specific assertions — latency and tail in seconds, exactly when
+`PropertyChanged` fires and when it must not, `Reset()`, the silence flag,
+rendering in place, and the parameter table the host is handed. See
+[Verification](#verification).
 
 Those two link the plug-in into the test binary, which is why they can compare
 bit for bit — and also why they cannot see the ABI at all.

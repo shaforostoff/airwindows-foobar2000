@@ -43,14 +43,18 @@ esac
 # The cores are canonical in the foobar2000 tree, which is where they are
 # developed and where the test harness lives. The VST2 wrapper has no copy
 # there - foo_dsp_* is a foobar2000 component, not a VST - so for those three
-# files WinVST is the canonical copy and LinuxVST mirrors it. Both ports
-# compile the same wrapper, so a change to the parameter mapping or the
-# latency reporting in one of them belongs in both.
+# files WinVST is the canonical copy and the other VST2 ports mirror it. All
+# three compile the same wrapper, so a change to the parameter mapping or the
+# latency reporting in one of them belongs in all of them.
+#
+# MacAU takes the cores but not the wrapper: an Audio Unit is a different
+# interface, so MacAU/Declick/Declick.cpp is its own source rather than a copy
+# of anybody's. The cores are the only thing it shares.
 mirrors="
-foobar2000_dsp/foo_dsp_declick|declick_core.h,declick_core.cpp|WinVST/Declick,LinuxVST/src/Declick
-foobar2000_dsp/foo_dsp_dehum|dehum_core.h,dehum_core.cpp|WinVST/Dehum,LinuxVST/src/Dehum
-WinVST/Declick|Declick.h,Declick.cpp,DeclickProc.cpp|LinuxVST/src/Declick
-WinVST/Dehum|Dehum.h,Dehum.cpp,DehumProc.cpp|LinuxVST/src/Dehum
+foobar2000_dsp/foo_dsp_declick|declick_core.h,declick_core.cpp|WinVST/Declick,LinuxVST/src/Declick,MacVST/Declick/source,MacAU/Declick
+foobar2000_dsp/foo_dsp_dehum|dehum_core.h,dehum_core.cpp|WinVST/Dehum,LinuxVST/src/Dehum,MacVST/Dehum/source,MacAU/Dehum
+WinVST/Declick|Declick.h,Declick.cpp,DeclickProc.cpp|LinuxVST/src/Declick,MacVST/Declick/source
+WinVST/Dehum|Dehum.h,Dehum.cpp,DehumProc.cpp|LinuxVST/src/Dehum,MacVST/Dehum/source
 "
 
 drifted=0

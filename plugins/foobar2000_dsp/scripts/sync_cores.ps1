@@ -49,29 +49,38 @@ $plugins = Split-Path -Parent $root                  # plugins
 # The cores are canonical in the foobar2000 tree, which is where they are
 # developed and where the test harness lives. The VST2 wrapper has no copy there
 # - foo_dsp_* is a foobar2000 component, not a VST - so for those three files
-# WinVST is canonical and LinuxVST mirrors it.
+# WinVST is canonical and the other VST2 ports mirror it.
+#
+# MacAU takes the cores but not the wrapper: an Audio Unit is a different
+# interface, so its .cpp is its own source rather than a copy of anybody's.
 $mirrors = @(
     @{
         From  = Join-Path $root 'foo_dsp_declick'
         Files = @('declick_core.h', 'declick_core.cpp')
         To    = @((Join-Path $plugins 'WinVST\Declick'),
-                  (Join-Path $plugins 'LinuxVST\src\Declick'))
+                  (Join-Path $plugins 'LinuxVST\src\Declick'),
+                  (Join-Path $plugins 'MacVST\Declick\source'),
+                  (Join-Path $plugins 'MacAU\Declick'))
     },
     @{
         From  = Join-Path $root 'foo_dsp_dehum'
         Files = @('dehum_core.h', 'dehum_core.cpp')
         To    = @((Join-Path $plugins 'WinVST\Dehum'),
-                  (Join-Path $plugins 'LinuxVST\src\Dehum'))
+                  (Join-Path $plugins 'LinuxVST\src\Dehum'),
+                  (Join-Path $plugins 'MacVST\Dehum\source'),
+                  (Join-Path $plugins 'MacAU\Dehum'))
     },
     @{
         From  = Join-Path $plugins 'WinVST\Declick'
         Files = @('Declick.h', 'Declick.cpp', 'DeclickProc.cpp')
-        To    = @(Join-Path $plugins 'LinuxVST\src\Declick')
+        To    = @((Join-Path $plugins 'LinuxVST\src\Declick'),
+                  (Join-Path $plugins 'MacVST\Declick\source'))
     },
     @{
         From  = Join-Path $plugins 'WinVST\Dehum'
         Files = @('Dehum.h', 'Dehum.cpp', 'DehumProc.cpp')
-        To    = @(Join-Path $plugins 'LinuxVST\src\Dehum')
+        To    = @((Join-Path $plugins 'LinuxVST\src\Dehum'),
+                  (Join-Path $plugins 'MacVST\Dehum\source'))
     }
 )
 

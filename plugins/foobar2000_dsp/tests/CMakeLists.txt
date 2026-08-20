@@ -19,7 +19,15 @@
 #                        These two are Windows targets only because this project
 #                        is; scripts/build_linuxvst.sh builds and runs the same
 #                        two sources against the LinuxVST copies, which are
-#                        required to be byte-identical.
+#                        required to be byte-identical. So are the MacVST ones,
+#                        which is why MacVST gets no target of its own.
+#   declick_au_verify  - the MacAU port of the declicker vs. the core it shares.
+#                        MacAU is a wrapper in its own right rather than a
+#                        mirror of the VST one, so unlike MacVST it does need a
+#                        target. Built against plugins/MacAU/au_shim, not
+#                        Apple's CoreAudio sources. No SDK.
+#   dehum_au_verify    - the MacAU port of the dehummer, same arrangement.
+#                        No SDK.
 #   vst_host_verify    - NOT a target here. It loads a finished VST2 plug-in and
 #                        drives it over the C ABI, so it needs a built one to
 #                        point at; scripts\build_winvst.ps1 and
@@ -220,6 +228,63 @@ if(EXISTS "${WINVST_DEHUM_DIR}/Dehum.cpp")
 else()
     message(STATUS "plugins/WinVST/Dehum not present - skipping dehum_vst_verify")
 endif()
+
+# ---------------------------------------------------------------------------
+# The MacAU ports, against the cores they share with this tree.
+#
+# Same arrangement again: each compiles the MacAU folder's OWN copy of the core,
+# because that is the file the Audio Unit project builds. Mirror identity is
+# scripts/sync_cores.{ps1,sh}.
+#
+# au_shim must come first on the include path: that is where the "AUEffectBase.h"
+# the plug-in asks for is found. Apple's CoreAudio AUPublic and PublicUtility
+# sources are not in this repository - the .xcodeproj reaches for them under
+# $(SYSTEM_DEVELOPER_DIR), where no Xcode has put them for over a decade - so it
+# is a small stand-in that lets the wrapper compile and be driven. Unlike
+# vst2_shim it is not an ABI and nothing loads it, so there is no AU counterpart
+# of vst_host_verify - building a .component needs the Apple sources the shim
+# exists because of. See plugins/MacAU/au_shim/README.md.
+#
+# There is no MacVST equivalent of these, for the same reason there is no
+# LinuxVST one: MacVST/Declick/source and MacVST/Dehum/source are required to be
+# byte-identical to the WinVST wrapper by sync_cores, so declick_vst_verify and
+# dehum_vst_verify are already compiling that code or the mirror check fails
+# first.
+
+set(MACAU_SHIM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../MacAU/au_shim")
+
+foreach(_au Declick Dehum)
+    string(TOLOWER "${_au}" _core)
+    set(_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../MacAU/${_au}")
+
+    if(EXISTS "${_dir}/${_au}.cpp")
+        add_executable(${_core}_au_verify
+            ${_core}_au_verify.cpp
+            "${MACAU_SHIM_DIR}/AUEffectBase.h"
+            "${_dir}/${_au}.cpp"
+            "${_dir}/${_core}_core.cpp"
+        )
+
+        target_include_directories(${_core}_au_verify PRIVATE
+            "${MACAU_SHIM_DIR}"
+            "${_dir}")
+
+        if(MSVC)
+            target_compile_options(${_core}_au_verify PRIVATE /W4)
+            # The wrapper follows the Airwindows AU house pattern - the template's
+            # unused parameters, `fpdL = 1.0;` on a uint32_t, and a float store
+            # from a double - so it warns exactly where the other 540 do. Those
+            # are not ours to fix.
+            set_source_files_properties("${_dir}/${_au}.cpp"
+                PROPERTIES COMPILE_OPTIONS "/wd4244;/wd4305;/wd4100")
+        endif()
+
+        add_test(NAME ${_core}_au_verify COMMAND ${_core}_au_verify)
+        set_target_properties(${_core}_au_verify PROPERTIES FOLDER "tests")
+    else()
+        message(STATUS "plugins/MacAU/${_au} not present - skipping ${_core}_au_verify")
+    endif()
+endforeach()
 
 # ---------------------------------------------------------------------------
 # Preset serialisation. Always built - a compile break here is worth catching
