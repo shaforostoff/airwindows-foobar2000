@@ -7,20 +7,11 @@
  *  that header, and ../foobar2000_dsp/scripts/sync_cores.ps1 for what keeps the
  *  copies from drifting.
  *
- *  Two classes, because the two VirtualDJ interfaces can do different amounts
- *  for this core:
- *
- *    DehumEngine        the notch bank and the detector. Zero latency, works in
- *                       place, so it fits the live interface exactly.
- *    DehumBufferEngine  the same plus a scout. Random access to the song means
- *                       the opening of the record can be analysed faster than
- *                       it plays, which takes acquisition from tens of seconds
- *                       to a few - see dehum_vdj_scout.h.
- *
- *  The scout is on the derived class rather than switched on with a flag so
- *  that the live plug-in does not carry the extra dehum::Channel it would need
- *  and never use. Every call the wrappers make is resolved statically on the
- *  Engine template parameter, so shadowing is enough; there are no virtuals.
+ *  The notch bank, the detector, and a scout. The scout is what random access
+ *  to the song buys this core: it has no latency, so it gains nothing from
+ *  reading ahead as such, but the opening of the record can be analysed faster
+ *  than it plays and the lines handed to Channel::adopt() - which takes
+ *  acquisition from tens of seconds to a few. See dehum_vdj_scout.h.
  *
  *  The slider mappings are the ones the VST2 port uses, constant for constant -
  *  a slider position has to mean the same thing in every port or the
@@ -47,21 +38,14 @@ class DehumEngine {
 public:
     // -- identity ------------------------------------------------------------
 
-    static const char * liveName() { return "Dehum"; }
-    static const char * liveDescription() {
+    static const char * pluginName() { return "Dehum"; }
+    static const char * pluginDescription() {
         return "Finds continuous narrowband tones - mains hum, its harmonics, and "
                "the off-frequency drones on speed-corrected disc transfers - "
                "without being told the frequency, and cancels them with a "
                "tracking notch. Zero latency, plus an optional rumble high-pass. "
-               "Runs on a deck, a microphone or the master.";
-    }
-
-    static const char * bufferName() { return "Dehum Buffer"; }
-    static const char * bufferDescription() {
-        return "Dehum, reading the opening of the loaded song faster than it "
-               "plays so the hum is found in a few seconds instead of the tens "
-               "the detector needs unaided. Buffer effect: works on a loaded "
-               "song, not on a live input.";
+               "Reads the opening of the loaded song faster than it plays, so the "
+               "hum is found in seconds rather than tens of them.";
     }
 
     // -- parameters ----------------------------------------------------------
@@ -126,6 +110,9 @@ public:
             m_configured = false;
             return false;
         }
+        // Failing to get a scout is not failing to get a dehummer: without it
+        // the detector still finds the line, just later.
+        m_scout.begin(params(), rate);
         return true;
     }
 
@@ -158,6 +145,11 @@ public:
     //! the lines, the scores, and the analysis window they were found in.
     void reset() {
         m_fifo.clear();
+        // Rewound here rather than in discontinuity(): a seek is the same
+        // record, and the record is what a scout is per. BufferPipeline calls
+        // this from configure() too, so the scout is always started before the
+        // first buffer is served.
+        m_scout.newTrack(params().frequency);
         if (!m_configured) return;
         m_chan[0].reset();
         m_chan[1].reset();
@@ -210,13 +202,24 @@ public:
     size_t available() const { return m_fifo.available(); }
     void   pull(double * out, size_t frames) { m_fifo.pull(out, frames); }
 
-    //! Nothing is held, so there is nothing to run out. The realtime wrapper
-    //! calls this as a pre-roll and correctly gets a no-op.
-    void drain() {}
+    //! Once per served buffer. Hands over anything the scout has confirmed and
+    //! then lets it read a little more - see dehum_vdj_scout.h for the budget,
+    //! and for why reading less than it used to matters to whatever is upstream
+    //! in the chain.
+    void scout(SongSource & src, size_t served) {
+        if (!m_configured) return;
 
-    void scout(SongSource &, size_t) {}
+        dehum::LineReport lines[dehum::kMaxLines];
+        const int count = m_scout.take(lines, (int)dehum::kMaxLines);
+        if (count > 0) {
+            m_chan[0].adopt(lines, count);
+            m_chan[1].adopt(lines, count);
+        }
 
-protected:
+        m_scout.feed(src, served);
+    }
+
+private:
     void rebuild(double rate, const dehum::Params & p) {
         dehum::Config next;
         next.compute(p, rate);
@@ -229,15 +232,6 @@ protected:
         m_rate = rate;
         m_configured = true;
     }
-
-    void adoptLines(const dehum::LineReport * lines, int count) {
-        if (!m_configured || count <= 0) return;
-        m_chan[0].adopt(lines, count);
-        m_chan[1].adopt(lines, count);
-    }
-
-    bool configured() const { return m_configured; }
-    double rate() const { return m_rate; }
 
 private:
     // Slider positions for the calibrated defaults dehum::Params ships. Kept as
@@ -261,46 +255,9 @@ private:
     dehum::Params  m_active = dehum::Params::defaults();
     std::vector<double> m_work;   //!< the core works in place; this is the place
     Fifo   m_fifo;
+    DehumScout m_scout;
     double m_rate = 0.0;
     bool   m_configured = false;
-};
-
-// ---------------------------------------------------------------------------
-
-//! Dehum with a scout. See dehum_vdj_scout.h for what it does and why it is
-//! worth doing; this class is only the wiring.
-class DehumBufferEngine : public DehumEngine {
-public:
-    bool setRate(double rate) {
-        if (!DehumEngine::setRate(rate)) return false;
-        // Failing to get a scout is not failing to get a dehummer: without it
-        // the detector still finds the line, just later.
-        m_scout.begin(params(), rate);
-        return true;
-    }
-
-    //! A new record, which is the only thing a scout is per. Rewound here rather
-    //! than in discontinuity(): a seek is the same record, and re-reading its
-    //! opening every time the DJ moves the play position would be work for
-    //! nothing. BufferPipeline::configure() calls this too, so the scout is
-    //! always started before the first buffer is served.
-    void reset() {
-        DehumEngine::reset();
-        m_scout.newTrack(params().frequency);
-    }
-
-    void scout(SongSource & src, size_t served) {
-        if (!configured()) return;
-
-        dehum::LineReport lines[dehum::kMaxLines];
-        const int count = m_scout.take(lines, (int)dehum::kMaxLines);
-        if (count > 0) adoptLines(lines, count);
-
-        m_scout.feed(src, served);
-    }
-
-private:
-    DehumScout m_scout;
 };
 
 } // namespace vdj

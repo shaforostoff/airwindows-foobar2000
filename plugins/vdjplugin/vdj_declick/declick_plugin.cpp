@@ -18,6 +18,6 @@
 
 #include "vdj_entry.h"
 
-typedef vdj::BufferDsp<vdj::DeclickEngine> DeclickBufferPlugin;
+typedef vdj::BufferDsp<vdj::DeclickEngine> DeclickPlugin;
 
-VDJ_PLUGIN_ENTRY(DeclickBufferPlugin, IID_IVdjPluginBuffer8)
+VDJ_PLUGIN_ENTRY(DeclickPlugin, IID_IVdjPluginBuffer8)

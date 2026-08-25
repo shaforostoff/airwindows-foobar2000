@@ -5,14 +5,11 @@
 .DESCRIPTION
     Produces, per architecture:
 
-        plugins\dist\vdj\x64\Declick.dll         live effect, 880 samples late
-        plugins\dist\vdj\x64\DeclickBuffer.dll   deck effect, reads ahead, no delay
-        plugins\dist\vdj\x64\Dehum.dll           live effect, no delay
-        plugins\dist\vdj\x64\DehumBuffer.dll     deck effect, scouts the record
+        plugins\dist\vdj\x64\Declick.dll   reads ahead, no delay
+        plugins\dist\vdj\x64\Dehum.dll     no delay, scouts the record
         plugins\dist\vdj\x64\symbols\*.pdb
 
-    and the same under x86 when that architecture is asked for. Which of each
-    pair to use is not a matter of taste; see README.md.
+    and the same under x86 when that architecture is asked for.
 
     x64 by default and only. VirtualDJ has shipped a 64 bit build since 8.2 and
     a 32 bit plug-in cannot be loaded into it, so the 32 bit output is there for
@@ -86,7 +83,7 @@ if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
     throw "cmake was not found on PATH. Install CMake 3.16 or newer."
 }
 
-$plugNames = @('Declick', 'DeclickBuffer', 'Dehum', 'DehumBuffer')
+$plugNames = @('Declick', 'Dehum')
 $failed    = @()
 
 foreach ($a in $Arch) {

@@ -31,21 +31,12 @@ class DeclickEngine {
 public:
     // -- identity ------------------------------------------------------------
 
-    static const char * liveName() { return "Declick"; }
-    static const char * liveDescription() {
-        return "Autoregressive detect-and-interpolate declicker for shellac and "
-               "vinyl transfers. Live version: plays 20 ms late at 44.1 kHz "
-               "because the repair needs to see past the click. On a deck being "
-               "mixed, use Declick Buffer instead, which reads ahead and costs "
-               "no delay at all.";
-    }
-
-    static const char * bufferName() { return "Declick Buffer"; }
-    static const char * bufferDescription() {
+    static const char * pluginName() { return "Declick"; }
+    static const char * pluginDescription() {
         return "Autoregressive detect-and-interpolate declicker for shellac and "
                "vinyl transfers. Reads the song ahead of the play head, so the "
-               "repair gets the lookahead it needs and the deck stays in time. "
-               "Buffer effect: works on a loaded song, not on a live input.";
+               "repair gets the lookahead it needs and the deck stays in time - "
+               "no delay at all. Works on a loaded song, not on a live input.";
     }
 
     // -- parameters ----------------------------------------------------------
@@ -173,13 +164,6 @@ public:
         declick::scoped_flush_denormals ftz;
         m_chan[0].pull(out + 0, frames, kChannels);
         m_chan[1].pull(out + 1, frames, kChannels);
-    }
-
-    void drain() {
-        if (!m_configured) return;
-        declick::scoped_flush_denormals ftz;
-        m_chan[0].drain();
-        m_chan[1].drain();
     }
 
     //! Nothing to scout. Declick learns only the local noise floor, which

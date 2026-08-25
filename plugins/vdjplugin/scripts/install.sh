@@ -71,7 +71,7 @@ printf '%s\n' "$homes" | while IFS= read -r vdjhome; do
     [ -n "$vdjhome" ] || continue
     for arch in Plugins64 PluginsArm; do
         target="$vdjhome/$arch/SoundEffect"
-        for name in Declick DeclickBuffer Dehum DehumBuffer; do
+        for name in Declick Dehum; do
             if [ "$uninstall" -eq 1 ]; then
                 if [ -d "$target/$name.bundle" ]; then
                     rm -rf "$target/$name.bundle"
@@ -91,6 +91,6 @@ done
 if [ "$uninstall" -eq 0 ]; then
     echo
     echo "Restart VirtualDJ; the plug-in folder is scanned at startup."
-    echo "They appear under Settings > Extensions > Effects as Declick,"
-    echo "Declick Buffer, Dehum and Dehum Buffer."
+    echo "They appear under Settings > Extensions > Effects as"
+    echo "Declick and Dehum."
 fi

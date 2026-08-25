@@ -268,23 +268,24 @@ void testScoutedRemoval() {
 
     const double before = toneDb(song, 41.3, from, span);
 
-    vdj::DehumBufferEngine scouted;
+    vdj::DehumEngine scouted;
     const std::vector<short> withScout = driveSequential(scouted, src, frames, 512, kRate);
     const double after = toneDb(withScout, 41.3, from, span);
 
-    // The same run without a scout. This is the comparison that says the wiring
-    // actually does something: at 1.6-2.6 s the scout has published and the
-    // unaided detector has not finished convincing itself, so the notch is
-    // already deep in one and still coming up in the other. Measured at 23 dB
-    // apart, and the margin below is well inside that.
+    // The same audio through the bare core - reference() drives dehum::Channel
+    // itself and never calls adopt(), so it is the detector working unaided.
+    // That is the comparison that says the scout's wiring does something: at
+    // 1.6-2.6 s the scout has published and the unaided detector has not
+    // finished convincing itself, so the notch is already deep in one and still
+    // coming up in the other. Measured at 23 dB apart, and the margin below is
+    // well inside that.
     //
     // On a synthetic tone this prominent the unaided detector gets there soon
     // after, and by 3 s the two are identical. The gap the scout exists for is
     // the one on real transfers, where a line sitting in the rumble is only
     // reachable by the coherence route and takes 43 s - which no synthetic
     // fixture reproduces honestly, so it is not attempted here.
-    vdj::DehumEngine unaided;
-    const std::vector<short> without = driveSequential(unaided, src, frames, 512, kRate);
+    const std::vector<short> without = reference(song, frames, scouted.params());
     const double plain = toneDb(without, 41.3, from, span);
 
     printf("        41.3 Hz over 1.6-2.6 s: %.1f dB in, %.1f dB scouted, %.1f dB unaided\n",

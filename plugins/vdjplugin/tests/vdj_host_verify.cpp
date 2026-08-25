@@ -32,8 +32,6 @@
 
 #include "vdj_test_support.h"
 
-#include "vdj_realtime_dsp.h"
-
 #include "declick_engine.h"
 #include "dehum_engine.h"
 
@@ -156,35 +154,6 @@ void checkIdentity(Module & mod, const char * expectedName, bool buffer) {
 
 // ---------------------------------------------------------------------------
 
-//! Runs a live plug-in over one signal. `plugin` may be the loaded module's
-//! object or a statically constructed one - the point is that the two calls are
-//! indistinguishable from here.
-std::vector<float> runLive(IVdjPluginDsp8 * plugin, StubCallbacks & cb,
-                           const std::vector<short> & song, int nb) {
-    plugin->cb = &cb;
-    plugin->hInstance = 0;
-    plugin->OnLoad();
-    plugin->SampleRate = (int)kRate;
-    plugin->SongBpm = (int)(kRate / 2.0);
-    plugin->SongPosBeats = 0.0;
-    plugin->OnStart();
-
-    const size_t frames = song.size() / vdj::kChannels;
-    std::vector<float> buffer(frames * vdj::kChannels);
-    for (size_t i = 0; i < buffer.size(); ++i) {
-        buffer[i] = (float)song[i] * (1.0f / 32768.0f);
-    }
-
-    for (size_t pos = 0; pos < frames; pos += (size_t)nb) {
-        int n = nb;
-        if (pos + (size_t)n > frames) n = (int)(frames - pos);
-        plugin->OnProcessSamples(&buffer[pos * vdj::kChannels], n);
-    }
-
-    plugin->OnStop();
-    return buffer;
-}
-
 //! Runs a buffer plug-in over one song, forward, in equal blocks.
 std::vector<short> runBuffer(IVdjPluginBufferDsp8 * plugin, StubCallbacks & cb,
                              const std::vector<short> & song, int nb) {
@@ -232,56 +201,6 @@ void reportInfo(IVdjPlugin8 * plugin, const char * expectedName) {
            info.PluginName ? info.PluginName : "?",
            info.Version ? info.Version : "?",
            info.Description ? info.Description : "?");
-}
-
-//! One live plug-in: load it, drive it, and require the loaded module and the
-//! statically linked class to produce identical audio.
-template<class Engine>
-void verifyLive(const std::string & dir, const char * file, const char * name) {
-    printf("  -- %s (live) --\n", file);
-    Module mod;
-    if (!mod.load(dir, file)) return;
-
-    IVdjPluginDsp8 * loaded = (IVdjPluginDsp8 *)mod.create(IID_IVdjPluginDsp8);
-    if (loaded == NULL) {
-        check(false, "the module did not hand back an IVdjPluginDsp8");
-        return;
-    }
-    checkIdentity(mod, name, false);
-    reportInfo(loaded, name);
-
-    std::vector<short> song = music((size_t)(4.0 * kRate), kRate, 8080);
-    injectClicks(song, kRate, 30.0);
-    addTone(song, kRate, 50.0, 0.05);
-
-    StubCallbacks cbLoaded, cbStatic;
-    const std::vector<float> got = runLive(loaded, cbLoaded, song, 512);
-    loaded->Release();
-    // Released before the module is unloaded, and the module is unloaded before
-    // anything else is loaded: `delete this` has to run against the allocator
-    // that made the object.
-    mod.unload();
-
-    vdj::RealtimeDsp<Engine> * inproc = new vdj::RealtimeDsp<Engine>();
-    const std::vector<float> want = runLive(inproc, cbStatic, song, 512);
-    inproc->Release();
-
-    check(cbLoaded.declared.size() == cbStatic.declared.size()
-          && cbLoaded.declared.size() == 7,
-          "the loaded module declares the same seven sliders");
-
-    size_t at = want.size();
-    for (size_t i = 0; i < want.size() && i < got.size(); ++i) {
-        if (want[i] != got[i]) { at = i; break; }
-    }
-    if (at < want.size()) {
-        printf("  FAIL  the loaded module diverges at frame %llu (%g vs %g)\n",
-               (unsigned long long)(at / vdj::kChannels),
-               (double)want[at], (double)got[at]);
-        ++g_failures;
-    } else {
-        note("through the ABI, bit-identical to the same class linked in");
-    }
 }
 
 //! One buffer plug-in, the same way. This is the more searching of the two: it
@@ -351,10 +270,8 @@ int main(int argc, char ** argv) {
     const std::string dir = argv[1];
     printf("  modules from %s\n", dir.c_str());
 
-    verifyLive<vdj::DeclickEngine>(dir, "Declick", "Declick");
-    verifyLive<vdj::DehumEngine>(dir, "Dehum", "Dehum");
-    verifyBuffer<vdj::DeclickEngine>(dir, "DeclickBuffer", "Declick Buffer");
-    verifyBuffer<vdj::DehumBufferEngine>(dir, "DehumBuffer", "Dehum Buffer");
+    verifyBuffer<vdj::DeclickEngine>(dir, "Declick", "Declick");
+    verifyBuffer<vdj::DehumEngine>(dir, "Dehum", "Dehum");
 
     return finish("vdj_host_verify");
 }

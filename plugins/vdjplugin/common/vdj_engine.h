@@ -44,8 +44,8 @@ enum { kMaxSliceFrames = 4096 };
  *  base class, because every call below is on the audio thread and none of them
  *  wants a vtable:
  *
- *      static const char * name();            //!< "Declick"
- *      static const char * description();
+ *      static const char * pluginName();      //!< "Declick"
+ *      static const char * pluginDescription();
  *
  *      //! OnLoad. Register the sliders against the host's DeclareParameter*.
  *      void declareParameters(IVdjPlugin8 & host);
@@ -77,7 +77,6 @@ enum { kMaxSliceFrames = 4096 };
  *      void   push(const double * interleaved, size_t frames);
  *      size_t available() const;
  *      void   pull(double * interleaved, size_t frames);
- *      void   drain();                        //!< run lookahead() zeros through
  *
  *      //! Buffer wrapper only, once per served buffer, with the number of
  *      //! frames just served so the engine can budget against playback. This
@@ -140,36 +139,6 @@ inline void toShorts(const double * in, short * out, size_t frames) {
         out[i] = (short)((v < 0.0) ? (v - 0.5) : (v + 0.5));
     }
 }
-
-inline void fromFloats(const float * in, double * out, size_t frames) {
-    const size_t n = frames * kChannels;
-    for (size_t i = 0; i < n; ++i) out[i] = (double)in[i];
-}
-
-//! 32 bit floating point dither, the Airwindows one, verbatim from
-//! DeclickProc.cpp so that this port rounds down to float the way its siblings
-//! do. Unlike toShorts() above this really is a narrowing: the cores compute in
-//! double and OnProcessSamples takes float.
-class FloatDither {
-public:
-    FloatDither() : m_fpd(17), m_fpdR(2107) {}
-
-    void write(const double * in, float * out, size_t frames) {
-        for (size_t f = 0; f < frames; ++f) {
-            out[f * 2 + 0] = (float)one(in[f * 2 + 0], m_fpd);
-            out[f * 2 + 1] = (float)one(in[f * 2 + 1], m_fpdR);
-        }
-    }
-
-private:
-    static double one(double v, uint32_t & fpd) {
-        int expon;
-        std::frexp((float)v, &expon);
-        fpd ^= fpd << 13; fpd ^= fpd >> 17; fpd ^= fpd << 5;
-        return v + (((double)fpd - (double)0x7fffffff) * 5.5e-36 * std::pow(2.0, expon + 62));
-    }
-    uint32_t m_fpd, m_fpdR;
-};
 
 // ---------------------------------------------------------------------------
 

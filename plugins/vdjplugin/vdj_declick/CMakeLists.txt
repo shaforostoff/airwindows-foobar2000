@@ -1,5 +1,5 @@
-# Two plug-ins, one core. See ../CMakeLists.txt for which is which and
-# ../common/vdj_realtime_dsp.h for why there are two.
+# One plug-in. See ../CMakeLists.txt for why it is the buffer interface and not
+# the live one.
 #
 # declick_core.{h,cpp} is a mirror, not a source: it is copied here from
 # ../../foobar2000_dsp/foo_dsp_declick by scripts/sync_cores.ps1 (or .sh) in
@@ -7,13 +7,7 @@
 # the canonical copy.
 
 add_vdj_plugin(Declick
-    SOURCES declick_dsp.cpp
-            declick_core.cpp
-            declick_core.h
-            declick_engine.h)
-
-add_vdj_plugin(DeclickBuffer
-    SOURCES declick_buffer.cpp
+    SOURCES declick_plugin.cpp
             declick_core.cpp
             declick_core.h
             declick_engine.h)

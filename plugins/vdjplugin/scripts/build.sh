@@ -4,12 +4,8 @@
 #
 # Produces, as universal (x86_64 + arm64) bundles:
 #
-#     plugins/dist/vdj/mac/Declick.bundle          live effect, 784 samples late
-#     plugins/dist/vdj/mac/DeclickBuffer.bundle    deck effect, reads ahead, no delay
-#     plugins/dist/vdj/mac/Dehum.bundle            live effect, no delay
-#     plugins/dist/vdj/mac/DehumBuffer.bundle      deck effect, scouts the record
-#
-# Which of each pair to use is not a matter of taste; see README.md.
+#     plugins/dist/vdj/mac/Declick.bundle   reads ahead, no delay
+#     plugins/dist/vdj/mac/Dehum.bundle     no delay, scouts the record
 #
 # One universal bundle rather than two thin ones because VirtualDJ keeps Intel
 # plug-ins in Plugins64 and Apple Silicon ones in PluginsArm, and a universal
@@ -87,7 +83,7 @@ fi
 
 echo "=== package ==="
 mkdir -p "$out"
-for name in Declick DeclickBuffer Dehum DehumBuffer; do
+for name in Declick Dehum; do
     bundle="$build/plugins/$name.bundle"
     [ -d "$bundle" ] || { echo "expected $bundle" >&2; exit 1; }
     rm -rf "$out/$name.bundle"

@@ -50,7 +50,7 @@ add_vdj_test(vdj_host_verify
 target_include_directories(vdj_host_verify PRIVATE
     "${PROJECT_SOURCE_DIR}/vdj_declick"
     "${PROJECT_SOURCE_DIR}/vdj_dehum")
-add_dependencies(vdj_host_verify Declick DeclickBuffer Dehum DehumBuffer)
+add_dependencies(vdj_host_verify Declick Dehum)
 if(UNIX)
     target_link_libraries(vdj_host_verify PRIVATE ${CMAKE_DL_LIBS})
 endif()

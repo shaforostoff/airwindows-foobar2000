@@ -399,20 +399,20 @@ template<class Engine>
 class BufferDsp : public IVdjPluginBufferDsp8, public SongSource {
 public:
     HRESULT VDJ_API OnLoad() override {
-        VDJ_TRACEF("%s: OnLoad", Engine::bufferName());
+        VDJ_TRACEF("%s: OnLoad", Engine::pluginName());
         m_engine.declareParameters(*this);
         return S_OK;
     }
 
     HRESULT VDJ_API OnGetPluginInfo(TVdjPluginInfo8 * info) override {
-        info->PluginName  = Engine::bufferName();
+        info->PluginName  = Engine::pluginName();
         info->Author      = "Airwindows tree (MIT)";
-        info->Description = Engine::bufferDescription();
+        info->Description = Engine::pluginDescription();
         info->Version     = "1.0";
         info->Flags       = 0x00;
         info->Bitmap      = NULL;
         VDJ_TRACEF("%s: OnGetPluginInfo - registered as \"%s\"",
-                   Engine::bufferName(), info->PluginName);
+                   Engine::pluginName(), info->PluginName);
         return S_OK;
     }
 
@@ -421,7 +421,7 @@ public:
     HRESULT VDJ_API OnStart() override {
         // Switched on. Whatever is in the pipeline is from the last time it was
         // on, which may be a different record.
-        VDJ_TRACEF("%s: OnStart, SampleRate %d", Engine::bufferName(), SampleRate);
+        VDJ_TRACEF("%s: OnStart, SampleRate %d", Engine::pluginName(), SampleRate);
         m_pipeline.newTrack(m_engine);
         m_track[0] = 0;
         m_traced = false;
@@ -442,7 +442,7 @@ public:
         try {
             if (!m_traced) {
                 VDJ_TRACEF("%s: first buffer, %d frames at pos %d, %d Hz",
-                           Engine::bufferName(), nb, pos, SampleRate);
+                           Engine::pluginName(), nb, pos, SampleRate);
                 m_traced = true;
             }
             const double rate = (SampleRate > 0) ? (double)SampleRate : 44100.0;

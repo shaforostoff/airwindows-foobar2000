@@ -34,7 +34,7 @@
     Install into this VirtualDJ home instead of searching for one.
 
 .PARAMETER Uninstall
-    Remove the four plug-ins instead of copying them.
+    Remove the plug-ins instead of copying them.
 
 .EXAMPLE
     .\scripts\install.ps1
@@ -58,7 +58,7 @@ $root    = Split-Path -Parent $PSScriptRoot
 $plugins = Split-Path -Parent $root
 $dist    = Join-Path $plugins 'dist\vdj'
 
-$plugNames = @('Declick', 'DeclickBuffer', 'Dehum', 'DehumBuffer')
+$plugNames = @('Declick', 'Dehum')
 
 # --- where does VirtualDJ keep its plug-ins ---------------------------------
 $homes = @()
@@ -124,6 +124,6 @@ if ($copied -eq 0) {
     Write-Warning "nothing to do"
 } elseif (-not $Uninstall) {
     Write-Host "`nRestart VirtualDJ; the plug-in folder is scanned at startup." -ForegroundColor Cyan
-    Write-Host "They appear under Settings > Extensions > Effects as Declick, " -NoNewline
-    Write-Host "Declick Buffer, Dehum and Dehum Buffer."
+    Write-Host "They appear under Settings > Extensions > Effects as " -NoNewline
+    Write-Host "Declick and Dehum."
 }

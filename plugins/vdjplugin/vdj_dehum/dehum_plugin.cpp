@@ -17,6 +17,6 @@
 
 #include "vdj_entry.h"
 
-typedef vdj::BufferDsp<vdj::DehumBufferEngine> DehumBufferPlugin;
+typedef vdj::BufferDsp<vdj::DehumEngine> DehumPlugin;
 
-VDJ_PLUGIN_ENTRY(DehumBufferPlugin, IID_IVdjPluginBuffer8)
+VDJ_PLUGIN_ENTRY(DehumPlugin, IID_IVdjPluginBuffer8)

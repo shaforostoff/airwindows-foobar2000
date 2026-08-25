@@ -69,22 +69,25 @@ short of the notch it eventually reaches, the scouted run is already there.
 
 ---
 
-## The four plug-ins
+## The two plug-ins
 
-| Plug-in | Interface | Latency | Runs on | Notes |
-| --- | --- | --- | --- | --- |
-| **Declick Buffer** | `IVdjPluginBufferDsp8` | none | a loaded song | The one to use on a deck |
-| Declick | `IVdjPluginDsp8` | 880 samples (~20 ms at 44.1 kHz) | anything, including a mic and the master | Use when there is no song to read ahead of |
-| **Dehum** | `IVdjPluginDsp8` | none | anything, including a mic and the master | The general-purpose one |
-| Dehum Buffer | `IVdjPluginBufferDsp8` | none | a loaded song | Same cancellation, plus the scout |
+| Plug-in | Interface | Latency | |
+| --- | --- | --- | --- |
+| **Declick** | `IVdjPluginBufferDsp8` | none | Detect-and-interpolate repair for shellac and vinyl transfers |
+| **Dehum** | `IVdjPluginBufferDsp8` | none | Hum and drone cancellation, with the opening of the record scouted for lines |
 
-Bold is the one to reach for first in each case. In short: **Declick on a deck
-wants the buffer version; Dehum does not need it but is better with it.**
+Both use the buffer interface, and neither is built against `IVdjPluginDsp8`.
+The live interface was implemented first and then dropped: it works, but under
+it Declick plays 880 samples - about 20 ms - late, and on a deck that is being
+mixed a delay is not a detail. What the live interface would have bought is the
+ability to run on a microphone or on the master, where there is no song to read
+ahead of; if you want that back, the wrapper is in the history of
+`common/vdj_realtime_dsp.h` and it was working.
 
-One plug-in per module, four modules. That is forced by the SDK:
+One plug-in per module, two modules. That is forced by the SDK:
 `DllGetClassObject` is handed a single interface IID and has one object to give
-back, so a DLL cannot offer two differently named effects, and it is the IID —
-not the file name and not the folder — that decides what kind of plug-in
+back, so a DLL cannot offer two differently named effects, and it is the IID -
+not the file name and not the folder - that decides what kind of plug-in
 VirtualDJ thinks it has. See [`common/vdj_entry.h`](common/vdj_entry.h).
 
 ---
@@ -153,26 +156,30 @@ locations without being told which VirtualDJ is installed. By hand:
 | macOS, 2023+ | `~/Library/Application Support/VirtualDJ/Plugins64/SoundEffect` and `PluginsArm/SoundEffect` |
 | macOS, 8–2021 | `~/Documents/VirtualDJ/Plugins64/SoundEffect` |
 
-Restart VirtualDJ; the folder is scanned at startup. The four appear as
-*Declick*, *Declick Buffer*, *Dehum* and *Dehum Buffer*.
-
-All four go in `SoundEffect`, buffer ones included. A VirtualDJ 8.5 install
-creates exactly these category folders under `Plugins64`, and there is no
-separate one for a buffer DSP:
+Both go in `SoundEffect`. A VirtualDJ 2025 install creates exactly these
+category folders under `Plugins64`, and there is no separate one for a buffer
+DSP:
 
 ```
 AutoStart  OnlineSources  SoundEffect  VideoEffect  VideoTransition  Visualisations
 ```
 
 which is what one would expect given that VirtualDJ identifies a plug-in by
-asking it for an interface by IID rather than by where it sits. If *Declick
-Buffer* or *Dehum Buffer* does not turn up in the effects list on your build,
-moving it is still the first thing to try.
+asking it for an interface by IID rather than by where it sits. Confirmed
+working against VirtualDJ 2025 build 8818: both appear under
+**Settings > Extensions > Effects** and run on a deck.
 
-VirtualDJ writes a `<Name>.ini` beside its own `native_*.ini` files in
-`Plugins64` for each effect it has registered, so after the first launch the
-presence of `Declick.ini` and friends is the quick way to tell whether the scan
-found them.
+Two things about the scan are worth knowing, because both look like failure.
+
+**Nothing is loaded at scan time.** VirtualDJ does not call
+`DllGetClassObject` while it walks the folder - only when an effect is first
+switched on. So a plug-in appears in the list without its DLL ever having been
+opened, and a load trace that is empty after a restart says nothing at all.
+
+**The `.ini` is written per effect, in `SoundEffect`, not `Plugins64`.**
+VirtualDJ saves slider positions to `<Name>.ini` next to the DLL once it has
+registered the effect, so the presence of `Declick.ini` is the quick way to tell
+that the scan found it. Renaming a plug-in orphans its settings file.
 
 ---
 
@@ -210,17 +217,17 @@ pin the default positions against `Params::defaults()`.
 Moving a slider does not break the audio, with two exceptions. Dehum has none at
 all: only the sample rate sizes anything in that core, so every control retunes
 in place. Declick's **Max repair** and **Model order** resize the pipeline, so
-they restart it — silently in the buffer plug-in, where a restart is a warm-up
-and a re-serve, and as a short gap in the live one. Neither allocates: both
+they restart it — which here means a warm-up and a re-serve, not a gap. Neither
+allocates: both
 cores size their buffers from the sample rate alone, so after the first
 configure at a given rate the audio thread never touches the heap.
 
 ---
 
-## How the buffer plug-ins work
+## How the plug-ins work
 
 [`common/vdj_buffer_dsp.h`](common/vdj_buffer_dsp.h) has the full argument. The
-three things worth knowing from outside:
+four things worth knowing from outside:
 
 **`pos` is not monotonic.** It follows a deck, so scratching, seeking, cue
 juggling and loops all arrive as jumps at audio rate, and both cores are
@@ -235,6 +242,26 @@ window are settled by the time anyone hears anything. At the measured 180×
 realtime for Declick, that is about 1.5 ms of work in the call that pays for it.
 Wind Model order up to 256 and it is roughly ten times that — the figure to
 revisit if you do.
+
+**`pos` does not come from one consumer, and that one cost real debugging.**
+Playback asks for its block at the play head; something else asks for a quite
+different part of the record in between. In a VirtualDJ 2025 trace, Declick was
+serving 512-frame blocks mid-record while also being handed 4096-frame requests
+marching from the start of it — Dehum's own scout, upstream in the chain,
+reading through it. A buffer plug-in's `GetSongBuffer` is not a file read; it is
+whatever is upstream, which may be another plug-in doing real work somewhere
+else in the song.
+
+Every one of those alien reads misses the cache and restarts the pipeline, and
+the playback read after it misses too and restarts it again. That is fine, and
+cheap, *provided a restart is cheap*. It was not: the warm-up length was a
+number this file's author invented (0.25 s) rather than one the core asked for,
+and it was paid on every restart. Two restarts per audio buffer at 11,025 frames
+each is 45× the necessary work, and it stuttered. So the warm-up now comes from
+`Engine::warmupFrames()` — Declick's `madWindow`, 1323 frames, is what its
+detector actually needs — and a restart within `kRestartCooldownSec` of the last
+one gets none at all. `declick_vdj_verify::testSecondConsumer` replays that
+interleaving and holds the ratio under 2× (it was 4.99×).
 
 **Everything is on the audio thread.** No worker threads, no locks, and one
 allocation per plug-in per sample rate. The Dehum scout is budgeted against
@@ -258,9 +285,6 @@ quantisation of the fraction of a percent that actually changed. `Dry/Wet` at 0
 is therefore an exactly bit-transparent bypass, which `declick_vdj_verify`
 checks sample for sample.
 
-The live plug-ins get floats from VirtualDJ and do dither on the way down from
-the cores' double, using the same Airwindows dither as `DeclickProc.cpp`.
-
 ---
 
 ## Verification
@@ -274,7 +298,7 @@ Three binaries, none of which needs VirtualDJ installed:
 | | |
 | --- | --- |
 | `vdj_host_verify` | The ABI. Loads each finished module the way VirtualDJ does - one `GetProcAddress`, the IID, the vtable - and requires its audio to match the same wrapper linked statically, to the bit. Also that a module declines the interface it does not implement, since VirtualDJ would otherwise call it through the wrong vtable |
-| `declick_vdj_verify` | The readahead claim — pipeline output bit-identical to the core straight through the song, at four block sizes; cache consistency under jumps; restart determinism; exact bypass; the slider mappings |
+| `declick_vdj_verify` | The readahead claim — pipeline output bit-identical to the core straight through the song, at five block sizes; cache consistency under jumps; restart determinism; exact bypass; the slider mappings; and the second-consumer work bound described above |
 | `dehum_vdj_verify` | The same pipeline checks for the zero-latency core; the scout finds the line at the right frequency inside its advertised budget; what it finds reaches `adopt()` and gets cancelled; the slider mappings |
 
 Neither re-tests the DSP. `declick_verify`, `dehum_verify` and the rest in
@@ -306,22 +330,20 @@ cmake/
   vdj_download_sdk.cmake   fetch + checksum the SDK
   vdj_plugin.cmake         add_vdj_plugin(): a loadable module, .dll or .bundle
 common/
-  vdj_engine.h             what both wrappers drive; conversions, FIFO, SongSource
-  vdj_realtime_dsp.h       IVdjPluginDsp8 wrapper, and why Declick is late here
+  vdj_engine.h             what the wrapper drives; conversions, FIFO, SongSource
   vdj_buffer_dsp.h         IVdjPluginBufferDsp8 wrapper: the cache and the readahead
   vdj_entry.h              DllGetClassObject
+  vdj_trace.h              opt-in load trace, for when a host lists nothing
   vdjplugin.def            so the 32 bit export is not decorated
 vdj_declick/
   declick_core.{h,cpp}     MIRROR - see above
   declick_engine.h         sliders -> declick::Params -> Channel
-  declick_dsp.cpp          Declick.dll
-  declick_buffer.cpp       DeclickBuffer.dll
+  declick_plugin.cpp       Declick.dll
 vdj_dehum/
   dehum_core.{h,cpp}       MIRROR - see above
-  dehum_engine.h           sliders -> dehum::Params -> Channel, plus the scouting variant
+  dehum_engine.h           sliders -> dehum::Params -> Channel, and the scout
   dehum_vdj_scout.h        reads the opening of the record faster than it plays
-  dehum_dsp.cpp            Dehum.dll
-  dehum_buffer.cpp         DehumBuffer.dll
+  dehum_plugin.cpp         Dehum.dll
 scripts/
   get_sdk.{ps1,sh}         fetch the SDK by hand, if you want to
   build.{ps1,sh}           configure, build, verify, package into ../dist/vdj

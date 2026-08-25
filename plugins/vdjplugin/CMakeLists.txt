@@ -11,16 +11,15 @@
 # cmake/vdj_download_sdk.cmake. scripts/build.ps1 and scripts/build.sh wrap
 # the two lines above and package the result into ../dist/vdj.
 #
-# Four plug-ins come out of two DSP cores, because VirtualDJ has two audio
-# plug-in interfaces and the difference between them matters here more than it
-# would for a flanger. See README.md; the short version is that
-# IVdjPluginBufferDsp8 can read the song ahead of the play head and
-# IVdjPluginDsp8 cannot, and Declick needs 880 samples of lookahead.
+#   Declick.dll   detect-and-interpolate declicker, no delay
+#   Dehum.dll     hum and drone canceller, no delay, scouted acquisition
 #
-#   Declick.dll        IVdjPluginDsp8        live, 880 samples late
-#   DeclickBuffer.dll  IVdjPluginBufferDsp8  deck, no delay
-#   Dehum.dll          IVdjPluginDsp8        live, no delay
-#   DehumBuffer.dll    IVdjPluginBufferDsp8  deck, no delay, instant acquisition
+# Both are IVdjPluginBufferDsp8 rather than IVdjPluginDsp8, and that is the one
+# design decision worth knowing before reading anything here. A buffer plug-in
+# is asked for the song and may read any part of it, so Declick's 880 samples of
+# lookahead cost an extra read instead of 20 ms of delay - and a delay on a deck
+# is not a detail, it moves the deck off everything it is being mixed against.
+# See README.md.
 # ---------------------------------------------------------------------------
 
 cmake_minimum_required(VERSION 3.16)
