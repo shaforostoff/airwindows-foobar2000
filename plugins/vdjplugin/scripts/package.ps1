@@ -5,7 +5,7 @@
 .DESCRIPTION
     Produces one file:
 
-        plugins\dist\vdj\Airwindows-VirtualDJ-<version>-x64-Setup.exe
+        plugins\dist\vdj\ShellacFilters-VirtualDJ-<version>-x64-Setup.exe
 
     x64 only. VirtualDJ has been 64 bit since 8.2 and a 32 bit plug-in cannot
     be loaded into it, so there is nothing for a 32 bit installer to install.
@@ -107,7 +107,7 @@ Write-Host "makensis  $nsis" -ForegroundColor DarkGray
 # cmake_minimum_required.
 if (-not $Version) {
     $cml = Get-Content (Join-Path $root 'CMakeLists.txt') -Raw
-    $m = [regex]::Match($cml, 'project\(airwindows_virtualdj[^)]*?VERSION\s+([0-9][0-9.]*)')
+    $m = [regex]::Match($cml, 'project\(shellacfilters_virtualdj[^)]*?VERSION\s+([0-9][0-9.]*)')
     if (-not $m.Success) {
         throw "could not find the project() version in CMakeLists.txt; pass -Version"
     }
@@ -143,7 +143,7 @@ foreach ($name in $plugNames) {
 }
 
 # --- compile the installer --------------------------------------------------
-$outFile = Join-Path $dist "Airwindows-VirtualDJ-$Version-x64-Setup.exe"
+$outFile = Join-Path $dist "ShellacFilters-VirtualDJ-$Version-x64-Setup.exe"
 if (Test-Path $outFile) { Remove-Item $outFile -Force }
 
 Write-Host "`n=== installer ===" -ForegroundColor Cyan

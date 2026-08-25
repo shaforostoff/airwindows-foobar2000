@@ -64,11 +64,11 @@ inline const char * tracePath() {
     const char * tmp = getenv("TEMP");
     if (tmp == NULL || tmp[0] == 0) tmp = getenv("TMP");
     if (tmp == NULL || tmp[0] == 0) tmp = "C:";
-    snprintf(path, sizeof(path), "%s\\airwindows_vdj_trace.log", tmp);
+    snprintf(path, sizeof(path), "%s\\shellacfilters_vdj_trace.log", tmp);
 #else
     const char * env = getenv("VDJ_TRACE_LOG");
     snprintf(path, sizeof(path), "%s",
-             (env != NULL && env[0] != 0) ? env : "/tmp/airwindows_vdj_trace.log");
+             (env != NULL && env[0] != 0) ? env : "/tmp/shellacfilters_vdj_trace.log");
 #endif
     return path;
 }

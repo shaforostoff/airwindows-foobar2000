@@ -397,7 +397,7 @@ void testIdentityOpcodes(AEffect * e) {
 
     TextBuf v;
     check(send(e, effGetVendorString, 0, 0, v.s) == 1
-          && strcmp(v.s, "airwindows-foobar2000") == 0, "effGetVendorString", v.s);
+          && strcmp(v.s, "ShellacFilters") == 0, "effGetVendorString", v.s);
 
     TextBuf p;
     check(send(e, effGetProductString, 0, 0, p.s) == 1

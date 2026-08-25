@@ -30,9 +30,9 @@ if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 
-project(airwindows_virtualdj
+project(shellacfilters_virtualdj
         VERSION 1.0.0
-        DESCRIPTION "Airwindows-tree DSP plug-ins for VirtualDJ"
+        DESCRIPTION "ShellacFilters DSP plug-ins for VirtualDJ"
         LANGUAGES CXX)
 
 if(NOT WIN32 AND NOT APPLE)

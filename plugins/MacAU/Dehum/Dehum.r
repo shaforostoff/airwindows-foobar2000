@@ -5,7 +5,7 @@
 * 
 *	Created:	8/20/26
 *	
-*	Copyright:  Copyright © 2026 airwindows-foobar2000, MIT license as the rest of the tree
+*	Copyright:  Copyright © 2026 ShellacFilters, MIT license as the rest of the tree
 * 
 *	Disclaimer:	IMPORTANT:  This Apple software is supplied to you by Apple Computer, Inc. ("Apple") in 
 *				consideration of your agreement to the following terms, and your use, installation, modification 
@@ -54,7 +54,7 @@
 #define COMP_MANUF		Dehum_COMP_MANF	
 
 #define VERSION			kDehumVersion
-#define NAME			"airwindows-foobar2000: Dehum"
+#define NAME			"ShellacFilters: Dehum"
 #define DESCRIPTION		"Dehum AU (line detection)"
 #define ENTRY_POINT		"DehumEntry"
 

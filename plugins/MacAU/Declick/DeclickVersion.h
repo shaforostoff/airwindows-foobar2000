@@ -5,7 +5,7 @@
 * 
 *	Created:	8/20/26
 *	
-*	Copyright:  Copyright © 2026 airwindows-foobar2000, MIT license as the rest of the tree
+*	Copyright:  Copyright © 2026 ShellacFilters, MIT license as the rest of the tree
 * 
 *	Disclaimer:	IMPORTANT:  This Apple software is supplied to you by Apple Computer, Inc. ("Apple") in 
 *				consideration of your agreement to the following terms, and your use, installation, modification 
@@ -50,7 +50,7 @@
 #endif
 
 //~~~~~~~~~~~~~~  Change!!! ~~~~~~~~~~~~~~~~~~~~~//
-#define Declick_COMP_MANF			'Dthr'
+#define Declick_COMP_MANF			'Shlc'
 #define Declick_COMP_SUBTYPE		'dclk'
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~//
 

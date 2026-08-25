@@ -66,7 +66,7 @@ function(add_vdj_plugin target)
             BUNDLE TRUE
             BUNDLE_EXTENSION "bundle"
             MACOSX_BUNDLE_BUNDLE_NAME       "${target}"
-            MACOSX_BUNDLE_GUI_IDENTIFIER    "com.airwindows.vdj.${target}"
+            MACOSX_BUNDLE_GUI_IDENTIFIER    "com.shellacfilters.vdj.${target}"
             MACOSX_BUNDLE_BUNDLE_VERSION    "${PROJECT_VERSION}"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
         # vdjPlugin8.h pulls in CoreFoundation on this platform.

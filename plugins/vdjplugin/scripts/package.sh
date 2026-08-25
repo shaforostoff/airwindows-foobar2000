@@ -2,7 +2,7 @@
 #
 # Builds one macOS installer package that installs both VirtualDJ plug-ins.
 #
-#     plugins/dist/vdj/mac/Airwindows-VirtualDJ-<version>.pkg
+#     plugins/dist/vdj/mac/ShellacFilters-VirtualDJ-<version>.pkg
 #
 # Double-clickable, and it puts Declick and Dehum where VirtualDJ will find
 # them without the person installing having to know which of the four possible
@@ -20,7 +20,7 @@
 # in one or the other depending on how it was launched - Rosetta included. So
 # the payload is a staging copy under
 #
-#     ~/Library/Application Support/Airwindows/VirtualDJ/
+#     ~/Library/Application Support/ShellacFilters/VirtualDJ/
 #
 # and a postinstall script fans it out into every VirtualDJ home that exists,
 # which is the same decision install.sh makes and for the same reasons. The
@@ -68,7 +68,7 @@ src="${OUTDIR:-$plugins/dist/vdj/mac}"
 out="${PKGOUT:-$plugins/dist/vdj/mac}"
 stage="$root/build/pkg"
 
-identifier="com.airwindows.vdj.plugins"
+identifier="com.shellacfilters.vdj.plugins"
 skip_build=0
 skip_tests=0
 version=""
@@ -103,7 +103,7 @@ done
 # say the same thing the bundles do. project() rather than the first VERSION in
 # the file, which belongs to cmake_minimum_required.
 if [ -z "$version" ]; then
-    version=$(awk '/project\(airwindows_virtualdj/,/LANGUAGES/' "$root/CMakeLists.txt" |
+    version=$(awk '/project\(shellacfilters_virtualdj/,/LANGUAGES/' "$root/CMakeLists.txt" |
               sed -n 's/^[[:space:]]*VERSION[[:space:]]*\([0-9][0-9.]*\).*/\1/p' | head -1)
 fi
 [ -n "$version" ] || { echo "could not work out a version; pass --version" >&2; exit 1; }
@@ -161,14 +161,14 @@ cat > "$stage/root/uninstall.sh" <<'UNINSTALL'
 # Removes Declick and Dehum from every VirtualDJ plug-in folder, then removes
 # this staging copy and the installer receipt. Run it from the Terminal:
 #
-#     ~/Library/Application\ Support/Airwindows/VirtualDJ/uninstall.sh
+#     ~/Library/Application\ Support/ShellacFilters/VirtualDJ/uninstall.sh
 #
 # Restart VirtualDJ afterwards; the plug-in folder is scanned at startup.
 
 set -eu
 
 home="${HOME:?}"
-staged="$home/Library/Application Support/Airwindows/VirtualDJ"
+staged="$home/Library/Application Support/ShellacFilters/VirtualDJ"
 
 for vdjhome in "$home/Library/Application Support/VirtualDJ" \
                "$home/Documents/VirtualDJ"; do
@@ -184,7 +184,7 @@ for vdjhome in "$home/Library/Application Support/VirtualDJ" \
     done
 done
 
-pkgutil --forget com.airwindows.vdj.plugins >/dev/null 2>&1 || true
+pkgutil --forget com.shellacfilters.vdj.plugins >/dev/null 2>&1 || true
 rm -rf "$staged"
 echo "  removed  $staged"
 UNINSTALL
@@ -216,7 +216,7 @@ esac
     exit 1
 }
 
-staged="$home/Library/Application Support/Airwindows/VirtualDJ"
+staged="$home/Library/Application Support/ShellacFilters/VirtualDJ"
 owner=$(stat -f '%Su:%Sg' "$home" 2>/dev/null || echo "")
 
 # Both locations, because both can exist - someone who has run VirtualDJ 2021
@@ -250,7 +250,7 @@ printf '%s' "$homes" | while IFS= read -r vdjhome; do
     [ -n "$owner" ] && chown -R "$owner" "$vdjhome" 2>/dev/null || true
 done
 
-[ -n "$owner" ] && chown -R "$owner" "$home/Library/Application Support/Airwindows" 2>/dev/null || true
+[ -n "$owner" ] && chown -R "$owner" "$home/Library/Application Support/ShellacFilters" 2>/dev/null || true
 exit 0
 POSTINSTALL
 chmod 755 "$stage/scripts/postinstall"
@@ -278,7 +278,7 @@ under Settings > Extensions > Effects, as Declick and Dehum.
 
 To remove them again, run this from the Terminal:
 
-  ~/Library/Application\ Support/Airwindows/VirtualDJ/uninstall.sh
+  ~/Library/Application\ Support/ShellacFilters/VirtualDJ/uninstall.sh
 CONCLUSION
 
 [ -f "$repo/LICENSE" ] && cp "$repo/LICENSE" "$stage/resources/LICENSE.txt"
@@ -290,7 +290,7 @@ pkgbuild --root "$stage/root" \
          --scripts "$stage/scripts" \
          --identifier "$identifier" \
          --version "$version" \
-         --install-location "Library/Application Support/Airwindows/VirtualDJ" \
+         --install-location "Library/Application Support/ShellacFilters/VirtualDJ" \
          "$stage/pkgs/component.pkg" >/dev/null
 
 # customize="never" because there is one thing in here and nothing to choose
@@ -305,7 +305,7 @@ cat > "$stage/distribution.xml" <<DISTRIBUTION
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
     <title>Declick and Dehum for VirtualDJ</title>
-    <organization>com.airwindows</organization>
+    <organization>com.shellacfilters</organization>
     <options customize="never" require-scripts="true" hostArchitectures="x86_64,arm64"/>
     <domains enable_anywhere="false" enable_currentUserHome="true" enable_localSystem="false"/>
     <welcome file="welcome.txt" mime-type="text/plain"/>
@@ -324,7 +324,7 @@ cat > "$stage/distribution.xml" <<DISTRIBUTION
 </installer-gui-script>
 DISTRIBUTION
 
-pkg="$out/Airwindows-VirtualDJ-$version.pkg"
+pkg="$out/ShellacFilters-VirtualDJ-$version.pkg"
 mkdir -p "$out"
 rm -f "$pkg"
 

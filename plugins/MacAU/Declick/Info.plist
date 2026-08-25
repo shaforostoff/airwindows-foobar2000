@@ -9,7 +9,7 @@
 	<key>CFBundleIconFile</key>
 	<string></string>
 	<key>CFBundleIdentifier</key>
-	<string>com.airwindows.audiounit.${PRODUCT_NAME:identifier}</string>
+	<string>com.shellacfilters.audiounit.${PRODUCT_NAME:identifier}</string>
 	<key>CFBundleName</key>
 	<string>${PROJECTNAMEASIDENTIFIER}</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleSignature</key>
-	<string>Dthr</string>
+	<string>Shlc</string>
 	<key>CFBundleVersion</key>
 	<string>1.0</string>
 	<key>CSResourcesFileMapped</key>

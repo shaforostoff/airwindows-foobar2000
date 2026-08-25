@@ -41,8 +41,8 @@
 
 .PARAMETER Trace
     Build diagnostic plug-ins that log every load and lifecycle call to
-    %TEMP%irwindows_vdj_trace.log. For working out why a host does not list a
-    plug-in; see common/vdj_trace.h for how to read it. Not for shipping.
+    %TEMP%\shellacfilters_vdj_trace.log. For working out why a host does not
+    list a plug-in; see common/vdj_trace.h for how to read it. Not for shipping.
 
 .PARAMETER Install
     Copy the finished plug-ins into the VirtualDJ plug-in folder afterwards, by

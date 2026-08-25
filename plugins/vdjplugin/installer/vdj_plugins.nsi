@@ -1,5 +1,5 @@
 ; ============================================================================
-;  Airwindows VirtualDJ plug-ins - installer
+;  ShellacFilters VirtualDJ plug-ins - installer
 ;
 ;  Two DLLs into VirtualDJ's plug-in folder. That is the whole job, and the
 ;  script is longer than that only because of three things worth getting right.
@@ -55,13 +55,13 @@ Unicode true
   !define LICENSEFILE "..\..\..\LICENSE"
 !endif
 !ifndef OUTFILE
-  !define OUTFILE "..\..\dist\vdj\Airwindows-VirtualDJ-${VERSION}-x64-Setup.exe"
+  !define OUTFILE "..\..\dist\vdj\ShellacFilters-VirtualDJ-${VERSION}-x64-Setup.exe"
 !endif
 
-!define PRODUCT   "Airwindows VirtualDJ plug-ins"
-!define PUBLISHER "Airwindows tree (MIT)"
-!define REGKEY    "Software\Airwindows\VirtualDJ Plugins"
-!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\AirwindowsVirtualDJ"
+!define PRODUCT   "ShellacFilters VirtualDJ plug-ins"
+!define PUBLISHER "ShellacFilters (MIT)"
+!define REGKEY    "Software\ShellacFilters\VirtualDJ Plugins"
+!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\ShellacFiltersVirtualDJ"
 
 ; The category folder every VirtualDJ DSP plug-in lives in, buffer ones
 ; included - VirtualDJ decides what a plug-in is by the IID it answers, not by
@@ -206,8 +206,8 @@ Section "-prepare"
   ;
   ; The uninstaller does not go in the plug-in folder: VirtualDJ scans that
   ; directory and it should hold plug-ins and nothing else.
-  SetOutPath "$LOCALAPPDATA\Airwindows\VirtualDJ"
-  WriteUninstaller "$LOCALAPPDATA\Airwindows\VirtualDJ\uninstall.exe"
+  SetOutPath "$LOCALAPPDATA\ShellacFilters\VirtualDJ"
+  WriteUninstaller "$LOCALAPPDATA\ShellacFilters\VirtualDJ\uninstall.exe"
 
   WriteRegStr HKCU "${REGKEY}" "InstallHome" "$INSTDIR"
   WriteRegStr HKCU "${REGKEY}" "Version"     "${VERSION}"
@@ -218,7 +218,7 @@ Section "-prepare"
   WriteRegStr HKCU "${UNINSTKEY}" "DisplayVersion"  "${VERSION}"
   WriteRegStr HKCU "${UNINSTKEY}" "Publisher"       "${PUBLISHER}"
   WriteRegStr HKCU "${UNINSTKEY}" "UninstallString" \
-    '"$LOCALAPPDATA\Airwindows\VirtualDJ\uninstall.exe"'
+    '"$LOCALAPPDATA\ShellacFilters\VirtualDJ\uninstall.exe"'
   WriteRegStr HKCU "${UNINSTKEY}" "InstallLocation" "$INSTDIR\${PLUGDIR}"
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoRepair" 1
@@ -305,11 +305,11 @@ Section "Uninstall"
   RMDir "$0\${PLUGDIR}"
   RMDir "$0\Plugins64"
 
-  Delete "$LOCALAPPDATA\Airwindows\VirtualDJ\uninstall.exe"
-  RMDir  "$LOCALAPPDATA\Airwindows\VirtualDJ"
-  RMDir  "$LOCALAPPDATA\Airwindows"
+  Delete "$LOCALAPPDATA\ShellacFilters\VirtualDJ\uninstall.exe"
+  RMDir  "$LOCALAPPDATA\ShellacFilters\VirtualDJ"
+  RMDir  "$LOCALAPPDATA\ShellacFilters"
 
   DeleteRegKey HKCU "${UNINSTKEY}"
   DeleteRegKey HKCU "${REGKEY}"
-  DeleteRegKey /ifempty HKCU "Software\Airwindows"
+  DeleteRegKey /ifempty HKCU "Software\ShellacFilters"
 SectionEnd

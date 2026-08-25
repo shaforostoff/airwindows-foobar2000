@@ -256,5 +256,5 @@ bool Declick::getProductString(char* text) {
 
 bool Declick::getVendorString(char* text) {
 	//not airwindows: DeCrackle is Chris Johnson's, this one is not
-  	vst_strncpy (text, "airwindows-foobar2000", kVstMaxVendorStrLen); return true;
+  	vst_strncpy (text, "ShellacFilters", kVstMaxVendorStrLen); return true;
 }

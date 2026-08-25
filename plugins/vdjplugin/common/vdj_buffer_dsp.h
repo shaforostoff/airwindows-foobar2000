@@ -406,7 +406,7 @@ public:
 
     HRESULT VDJ_API OnGetPluginInfo(TVdjPluginInfo8 * info) override {
         info->PluginName  = Engine::pluginName();
-        info->Author      = "Airwindows tree (MIT)";
+        info->Author      = "ShellacFilters (MIT)";
         info->Description = Engine::pluginDescription();
         info->Version     = "1.0";
         info->Flags       = 0x00;

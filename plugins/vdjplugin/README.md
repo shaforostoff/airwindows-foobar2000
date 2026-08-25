@@ -197,7 +197,7 @@ what the binaries say.
 .\scripts\package.ps1 -SkipBuild       # package what is already in dist
 ```
 
-`plugins\dist\vdj\Airwindows-VirtualDJ-<version>-x64-Setup.exe`
+`plugins\dist\vdj\ShellacFilters-VirtualDJ-<version>-x64-Setup.exe`
 ([`installer/vdj_plugins.nsi`](installer/vdj_plugins.nsi)): one file, ~200 kB,
 no dependencies, runs on anything from Windows 2000 up. x64 only — VirtualDJ has
 been 64 bit since 8.2 and a 32 bit plug-in cannot be loaded into it, so there
@@ -234,7 +234,7 @@ bitmap. That is also why it looks plain.
 
 Uninstalling is a Programs and Features entry (under HKCU, since the install is
 per-user) pointing at
-`%LOCALAPPDATA%\Airwindows\VirtualDJ\uninstall.exe` — kept out of the plug-in
+`%LOCALAPPDATA%\ShellacFilters\VirtualDJ\uninstall.exe` — kept out of the plug-in
 folder, because VirtualDJ scans that directory and it should hold plug-ins and
 nothing else. It removes the two DLLs by name, never by wildcard, and leaves
 `Declick.ini` and `Dehum.ini` where they are: VirtualDJ writes them next to the
@@ -248,10 +248,10 @@ scripts/package.sh                     # build, verify, package
 scripts/package.sh --skip-build        # package what is already in dist
 ```
 
-`plugins/dist/vdj/mac/Airwindows-VirtualDJ-<version>.pkg`: one double-clickable
+`plugins/dist/vdj/mac/ShellacFilters-VirtualDJ-<version>.pkg`: one double-clickable
 installer carrying both plug-ins, which asks for no administrator password
 because VirtualDJ reads plug-ins per user. The payload is a staging copy in
-`~/Library/Application Support/Airwindows/VirtualDJ/` and a postinstall script
+`~/Library/Application Support/ShellacFilters/VirtualDJ/` and a postinstall script
 fans it out into whichever VirtualDJ homes exist, both architecture folders in
 each - the same decision `install.sh` makes, for the same reason: which folder
 is the right one is not knowable when the package is built. An `uninstall.sh`
