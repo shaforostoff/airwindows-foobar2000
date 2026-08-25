@@ -3,6 +3,8 @@
 #   foobar2000_dsp\scripts\build_winvst.ps1    winvst\*.dll
 #   foobar2000_dsp\scripts\build_linuxvst.sh   linuxvst\*.so
 #   vdjplugin\scripts\build.ps1 and build.sh   vdj\{x64,x86,mac}
+#   vdjplugin\scripts\package.ps1              vdj\*-x64-Setup.exe
+#   vdjplugin\scripts\package.sh               vdj\*.pkg
 # One level up from foobar2000_dsp because a VST2 DLL is not a foobar2000
 # component, and neither is a VirtualDJ plug-in.
 /dist/

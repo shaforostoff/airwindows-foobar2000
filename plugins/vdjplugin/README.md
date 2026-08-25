@@ -181,6 +181,92 @@ VirtualDJ saves slider positions to `<Name>.ini` next to the DLL once it has
 registered the effect, so the presence of `Declick.ini` is the quick way to tell
 that the scan found it. Renaming a plug-in orphans its settings file.
 
+### One installer, for handing to somebody else
+
+Both `package` scripts build and verify first, then wrap. That order is the
+point of them: packaging an unverified DLL into something that looks
+installable is the one mistake worth making impossible, so `--skip-build` /
+`-SkipBuild` exists only for re-wrapping binaries you just built yourself. Both
+take the version from `project()` in `CMakeLists.txt`, so the file name says
+what the binaries say.
+
+#### Windows
+
+```powershell
+.\scripts\package.ps1                  # build, verify, package
+.\scripts\package.ps1 -SkipBuild       # package what is already in dist
+```
+
+`plugins\dist\vdj\Airwindows-VirtualDJ-<version>-x64-Setup.exe`
+([`installer/vdj_plugins.nsi`](installer/vdj_plugins.nsi)): one file, ~200 kB,
+no dependencies, runs on anything from Windows 2000 up. x64 only — VirtualDJ has
+been 64 bit since 8.2 and a 32 bit plug-in cannot be loaded into it, so there
+would be nothing for a 32 bit installer to install. Needs NSIS 3 to build;
+`makensis.exe` is looked for on `PATH`, then under `HKLM\SOFTWARE\NSIS`, then in
+the usual Program Files places, or pass `-MakeNsis`.
+
+Three things about it are decisions rather than defaults.
+
+**It does not elevate, and must not.** The plug-in folder is per-user. An
+elevated installer resolves `%LOCALAPPDATA%` to the *administrator's* profile,
+so the DLLs land somewhere the VirtualDJ the user is actually running never
+scans and the effects simply never appear. Hence `RequestExecutionLevel user` —
+and hence NSIS rather than an MSI, since a per-machine MSI cannot write a
+per-user folder correctly and a per-user MSI is a fight with `ALLUSERS` for no
+gain here.
+
+**It refuses rather than lies when the DLL is locked.** VirtualDJ holds a module
+open from the moment its effect is first switched on until it exits, so
+reinstalling over a running VirtualDJ cannot overwrite the file. `SetOverwrite
+try` turns that into the error flag instead of an abort, and the user gets a
+Retry that names the actual cause. `/SD IDCANCEL` on that box matters more than
+it looks: `MB_RETRYCANCEL` defaults to *Retry*, and a silent install answers
+every box with its default, so without it `setup.exe /S` over a running
+VirtualDJ would retry the same doomed copy for ever with no window to show for
+it.
+
+**It is DPI-aware, so it is crisp rather than upscaled.** `dpiAware` plus
+`dpiAwareness PerMonitorV2,system` — per-monitor so dragging the window to a
+different display re-lays it out, system awareness as the fallback for Windows 8
+and 8.1, which have no per-monitor mode. Text scales with the DPI; bitmaps would
+not, so the installer deliberately has none — no MUI header image, no welcome
+bitmap. That is also why it looks plain.
+
+Uninstalling is a Programs and Features entry (under HKCU, since the install is
+per-user) pointing at
+`%LOCALAPPDATA%\Airwindows\VirtualDJ\uninstall.exe` — kept out of the plug-in
+folder, because VirtualDJ scans that directory and it should hold plug-ins and
+nothing else. It removes the two DLLs by name, never by wildcard, and leaves
+`Declick.ini` and `Dehum.ini` where they are: VirtualDJ writes them next to the
+DLL and they hold the settings you tuned, which are worth more than a tidy
+folder.
+
+#### macOS
+
+```bash
+scripts/package.sh                     # build, verify, package
+scripts/package.sh --skip-build        # package what is already in dist
+```
+
+`plugins/dist/vdj/mac/Airwindows-VirtualDJ-<version>.pkg`: one double-clickable
+installer carrying both plug-ins, which asks for no administrator password
+because VirtualDJ reads plug-ins per user. The payload is a staging copy in
+`~/Library/Application Support/Airwindows/VirtualDJ/` and a postinstall script
+fans it out into whichever VirtualDJ homes exist, both architecture folders in
+each - the same decision `install.sh` makes, for the same reason: which folder
+is the right one is not knowable when the package is built. An `uninstall.sh`
+is left beside the staging copy.
+
+Unsigned by default, which Gatekeeper will object to on any machine the file was
+downloaded to; `--sign "Developer ID Installer: ..."` and then notarising is
+what fixes that, the same argument
+[`../AirwindowsVSTToSignedVSTProcess.txt`](../AirwindowsVSTToSignedVSTProcess.txt)
+makes for the VSTs. `--codesign` signs the bundles inside first.
+
+The Windows installer is unsigned too, and SmartScreen will warn about it on any
+machine it was downloaded to until enough people have run it. An Authenticode
+certificate is the only real fix; there is no equivalent of ad-hoc signing here.
+
 ---
 
 ## Controls
@@ -344,10 +430,14 @@ vdj_dehum/
   dehum_engine.h           sliders -> dehum::Params -> Channel, and the scout
   dehum_vdj_scout.h        reads the opening of the record faster than it plays
   dehum_plugin.cpp         Dehum.dll
+installer/
+  vdj_plugins.nsi          the Windows installer: per-user, no elevation, DPI-aware
 scripts/
   get_sdk.{ps1,sh}         fetch the SDK by hand, if you want to
   build.{ps1,sh}           configure, build, verify, package into ../dist/vdj
   install.{ps1,sh}         copy into VirtualDJ's plug-in folder
+  package.ps1              both plug-ins as one Windows setup.exe (NSIS)
+  package.sh               both plug-ins as one macOS .pkg installer
 tests/
   vdj_test_support.h       a stub host, a stub song, signal generators
   declick_vdj_verify.cpp
