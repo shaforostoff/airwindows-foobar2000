@@ -37,6 +37,7 @@
 #include "vdjDsp8.h"
 
 #include "vdj_engine.h"
+#include "vdj_trace.h"
 
 #include <algorithm>
 #include <new>
@@ -52,6 +53,7 @@ template<class Engine>
 class RealtimeDsp : public IVdjPluginDsp8 {
 public:
     HRESULT VDJ_API OnLoad() override {
+        VDJ_TRACEF("%s: OnLoad", Engine::liveName());
         m_engine.declareParameters(*this);
         return S_OK;
     }
@@ -63,6 +65,8 @@ public:
         info->Version     = "1.0";
         info->Flags       = 0x00;
         info->Bitmap      = NULL;
+        VDJ_TRACEF("%s: OnGetPluginInfo - registered as \"%s\"",
+                   Engine::liveName(), info->PluginName);
         return S_OK;
     }
 
@@ -71,7 +75,9 @@ public:
     //! Switched on. The pipeline is holding whatever went through it the last
     //! time, which is not audio anybody wants spliced onto the front of this.
     HRESULT VDJ_API OnStart() override {
+        VDJ_TRACEF("%s: OnStart, SampleRate %d", Engine::liveName(), SampleRate);
         m_needsPrime = true;
+        m_traced = false;
         return S_OK;
     }
 
@@ -84,6 +90,11 @@ public:
     HRESULT VDJ_API OnProcessSamples(float * buffer, int nb) override {
         if (buffer == NULL || nb <= 0) return S_OK;
         try {
+            if (!m_traced) {
+                VDJ_TRACEF("%s: first buffer, %d frames at %d Hz",
+                           Engine::liveName(), nb, SampleRate);
+                m_traced = true;
+            }
             const double rate = (SampleRate > 0) ? (double)SampleRate : 44100.0;
             if (rate != m_rate) {
                 if (!m_engine.setRate(rate)) return E_FAIL;
@@ -140,6 +151,9 @@ private:
     FloatDither m_dither;
     double m_rate = 0.0;
     bool   m_needsPrime = true;
+    //! Only so the trace records the first buffer rather than every buffer.
+    //! Costs a branch that the optimiser keeps whether tracing is on or not.
+    bool   m_traced = false;
 };
 
 } // namespace vdj

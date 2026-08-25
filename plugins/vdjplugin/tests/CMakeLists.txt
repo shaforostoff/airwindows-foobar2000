@@ -26,8 +26,11 @@ endfunction()
 add_vdj_test(declick_vdj_verify
     SOURCES declick_vdj_verify.cpp
             "${PROJECT_SOURCE_DIR}/vdj_declick/declick_core.cpp")
+# vdj_dehum too: testSecondConsumer() reproduces Dehum's scout reading through
+# Declick, so it takes kScoutSlice and kScoutSpeedup from the scout itself.
 target_include_directories(declick_vdj_verify PRIVATE
-    "${PROJECT_SOURCE_DIR}/vdj_declick")
+    "${PROJECT_SOURCE_DIR}/vdj_declick"
+    "${PROJECT_SOURCE_DIR}/vdj_dehum")
 
 add_vdj_test(dehum_vdj_verify
     SOURCES dehum_vdj_verify.cpp

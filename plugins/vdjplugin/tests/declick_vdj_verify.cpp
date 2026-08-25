@@ -29,6 +29,9 @@
 #include "vdj_test_support.h"
 
 #include "declick_engine.h"
+// kScoutSlice / kScoutSpeedup: the second consumer this reproduces is Dehum's
+// scout, so the numbers come from it rather than from a guess here.
+#include "dehum_vdj_scout.h"
 
 #include <algorithm>
 
@@ -253,6 +256,79 @@ void testBypassIsExact() {
            (double)bad, 0.0);
 }
 
+//! Two consumers at once, which is the case that broke.
+//!
+//! `pos` does not come from one place. In a VirtualDJ 2025 log, Declick Buffer
+//! was serving 512-frame blocks at the play head while *also* being asked for
+//! 4096-frame blocks marching from the start of the record - Dehum Buffer's
+//! scout, upstream in the chain, reading ahead through it. Every alien read
+//! missed the cache and restarted the pipeline; the playback read after it
+//! missed too and restarted it again. With a warm-up invented by the pipeline
+//! rather than asked of the engine, that was 22000 frames of Declick per 512
+//! frames of audio, and it stuttered until the scout finished.
+//!
+//! So this reproduces that interleaving and measures the thing that went wrong:
+//! how much the engine is made to produce against how much was actually asked
+//! for. It is a work bound, not an audio comparison, because that is what the
+//! defect was.
+void testSecondConsumer() {
+    const size_t frames = (size_t)(30.0 * kRate);
+    std::vector<short> song = music(frames, kRate, 17171);
+    injectClicks(song, kRate, 25.0);
+    MemorySong src(song);
+
+    vdj::DeclickEngine engine;
+    engine.setRate(kRate);
+    vdj::BufferPipeline<vdj::DeclickEngine> pipe;
+    pipe.configure(engine, kRate);
+
+    const int nb = 512;
+    const int alien = (int)vdj::kScoutSlice;     // what the scout actually asks for
+    int64_t play = (int64_t)(12.0 * kRate);     // the deck, mid-record
+    int64_t scan = 0;                            // the scout, from the top
+    int64_t served = 0;
+
+    std::vector<short> heard;
+    heard.reserve((size_t)(4.0 * kRate) * vdj::kChannels);
+
+    for (int i = 0; i < 300; ++i) {
+        const short * p = pipe.serve(engine, src, (int)play, nb);
+        heard.insert(heard.end(), p, p + (size_t)nb * vdj::kChannels);
+        play += nb;
+        served += nb;
+
+        // The alien reader, at 8x the deck: kScoutSpeedup * nb per call, which
+        // is exactly one kScoutSlice when nb is 512.
+        pipe.serve(engine, src, (int)scan, alien);
+        scan += (int64_t)vdj::kScoutSpeedup * nb;
+        served += alien;
+    }
+
+    const double ratio = (double)pipe.produced() / (double)served;
+    printf("        %lld frames served, %lld produced (%.2fx), %llu restarts\n",
+           (long long)served, (long long)pipe.produced(), ratio,
+           (unsigned long long)pipe.restarts());
+    // 5.8x before the fix, 1.1x after. Two leaves plenty of room for the
+    // block-granularity overshoot without letting a warm-up back in per call.
+    checkf(ratio < 2.0,
+           "the engine produced %.2fx what was asked for; a second consumer "
+           "should not cost more than about %.2fx", ratio, 2.0);
+
+    // And the deck should still hear declicked audio, not silence and not the
+    // input: restarting often costs the detector its noise estimate, so this is
+    // not bit-identical to an undisturbed run, but it must still be doing the
+    // job.
+    check(!allZero(heard.data(), heard.size() / vdj::kChannels),
+          "the deck is still served audio while the second consumer reads");
+
+    size_t changed = 0;
+    const size_t at = (size_t)(12.0 * kRate);
+    for (size_t f = 0; f + 1 < heard.size() / vdj::kChannels; ++f) {
+        if (heard[f * 2] != song[(at + f) * 2]) ++changed;
+    }
+    check(changed > 0, "and is still being repaired, not passed through");
+}
+
 } // anonymous namespace
 
 int main() {
@@ -261,5 +337,6 @@ int main() {
     testReadahead();
     testJumps();
     testBypassIsExact();
+    testSecondConsumer();
     return finish("declick_vdj_verify");
 }

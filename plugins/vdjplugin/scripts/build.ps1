@@ -42,6 +42,11 @@
 .PARAMETER Clean
     Wipe the build trees first.
 
+.PARAMETER Trace
+    Build diagnostic plug-ins that log every load and lifecycle call to
+    %TEMP%irwindows_vdj_trace.log. For working out why a host does not list a
+    plug-in; see common/vdj_trace.h for how to read it. Not for shipping.
+
 .PARAMETER Install
     Copy the finished plug-ins into the VirtualDJ plug-in folder afterwards, by
     handing off to install.ps1.
@@ -64,7 +69,8 @@ param(
     [string]   $Generator = '',
     [switch]   $SkipTests,
     [switch]   $Clean,
-    [switch]   $Install
+    [switch]   $Install,
+    [switch]   $Trace
 )
 
 $ErrorActionPreference = 'Stop'
@@ -96,6 +102,7 @@ foreach ($a in $Arch) {
     $cfg = @('-S', $root, '-B', $build, '-A', $platform)
     if ($Generator) { $cfg += @('-G', $Generator) }
     if ($SkipTests) { $cfg += '-DVDJ_BUILD_TESTS=OFF' }
+    $cfg += ('-DVDJ_TRACE=' + $(if ($Trace) { 'ON' } else { 'OFF' }))
     & cmake @cfg
     if ($LASTEXITCODE -ne 0) { throw "configure failed for $a" }
 

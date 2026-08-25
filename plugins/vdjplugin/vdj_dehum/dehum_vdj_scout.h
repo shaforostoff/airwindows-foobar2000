@@ -54,10 +54,10 @@ namespace vdj {
 //! the ones that need most of this window.
 const double kScoutSeconds = 60.0;
 
-//! How much less than that is still worth acting on, if the song turns out to
-//! be shorter or the reads start failing. Below this the prominence route has
-//! barely had time to confirm anything and the coherence route none at all, so
-//! there would be nothing to hand over.
+//! How much less than that is still worth acting on - and also how soon the
+//! scout is allowed to stop early, once it has actually confirmed a line.
+//! Below this the prominence route has barely had time to confirm anything and
+//! the coherence route none at all, so there would be nothing to hand over.
 const double kScoutMinSeconds = 10.0;
 
 //! Scouting speed as a multiple of playback.
@@ -149,6 +149,24 @@ public:
 
             m_pos += (int64_t)n;
             budget -= (int64_t)n;
+
+            // Stop as soon as there is something to hand over and enough of the
+            // record has been read to trust it. The 60 s window exists for the
+            // coherence route, which needs most of it; a line the prominence
+            // route can see turns up in the first ten and there is nothing to be
+            // gained by reading the other fifty.
+            //
+            // Which matters for more than time. Every one of these reads goes
+            // through GetSongBuffer, and GetSongBuffer is not a file - it is
+            // whatever is upstream in the chain, which may be another buffer
+            // plug-in doing real work at a quite different position. Reading
+            // less is the only part of that cost this side can control. See
+            // kRestartCooldownSec in ../common/vdj_buffer_dsp.h for the other
+            // half.
+            if (m_pos >= m_least && m_ch.lineCount() > 0) {
+                finish();
+                return;
+            }
         }
 
         if (m_pos >= m_wanted) finish();

@@ -179,6 +179,15 @@ public:
     //! interface and Declick is not.
     int lookahead() const { return 0; }
 
+    //! None, and for a different reason from having no lookahead. What a seek
+    //! invalidates here is the analysis window, and that is 1.5 s long - far too
+    //! much to run through on the audio thread, and pointless besides: the lines
+    //! survive a discontinuity() by design, so the notch keeps cancelling what
+    //! it was already cancelling and the detector refills the window in its own
+    //! time while it does. Warming up would buy a fresher spectrum, which is
+    //! only used to find lines that are not there yet.
+    int warmupFrames() const { return 0; }
+
     void push(const double * in, size_t frames) {
         if (!m_configured) {
             m_fifo.push(in, frames);

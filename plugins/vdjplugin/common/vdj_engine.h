@@ -68,6 +68,12 @@ enum { kMaxSliceFrames = 4096 };
  *                               //!< record, drop what is only true of the
  *                               //!< audio that was in flight
  *      int    lookahead() const;              //!< frames held before output
+ *
+ *      //! Frames a restart should run before the audio that was asked for, so
+ *      //! that whatever the core measures from its own history is settled.
+ *      //! Only the engine knows this; a figure invented by the caller was half
+ *      //! of a real bug - see kRestartCooldownSec in vdj_buffer_dsp.h.
+ *      int    warmupFrames() const;
  *      void   push(const double * interleaved, size_t frames);
  *      size_t available() const;
  *      void   pull(double * interleaved, size_t frames);

@@ -216,10 +216,22 @@ void testScout() {
     }
     check(!scout.running(), "the scout finishes");
 
-    // Budget: kScoutSpeedup times what was served, per call. Reaching 20 s of
-    // song at 8x on 512-frame buffers is 20*44100/(512*8) calls, plus the ones
-    // spent discovering the end of the song.
-    const int expected = (int)(20.0 * kRate / (double)(served * vdj::kScoutSpeedup));
+    // Two things are pinned here.
+    //
+    // The early stop: the scout is allowed to give up as soon as it has a
+    // confirmed line and has read kScoutMinSeconds, and on this fixture - a
+    // prominent tone - it should. Reading the other fifty seconds would cost
+    // whatever is upstream in the chain for nothing, which is half of the
+    // stutter this and kRestartCooldownSec were written for.
+    const double read = (double)scout.framesRead() / kRate;
+    printf("        read %.1f s of the record before stopping\n", read);
+    checkf(read >= vdj::kScoutMinSeconds - 0.2 && read < vdj::kScoutSeconds,
+           "scout read %.1f s; it should stop early, after at least %.1f",
+           read, vdj::kScoutMinSeconds);
+
+    // And the budget: kScoutSpeedup times what was served, per call, so
+    // scouting runs at a fixed multiple of playback whatever the block size.
+    const int expected = (int)(read * kRate / (double)(served * vdj::kScoutSpeedup));
     checkf(calls >= expected && calls <= expected + 32,
            "scouted in %.0f calls, expected about %.0f", (double)calls, (double)expected);
 

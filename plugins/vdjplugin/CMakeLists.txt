@@ -49,6 +49,11 @@ set(VDJ_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/virtualdj_sdk"
 option(VDJ_SDK_AUTO_DOWNLOAD "Fetch the VirtualDJ SDK if it is not present" ON)
 option(VDJ_STATIC_CRT        "Link the C runtime statically (no VC redist needed)" ON)
 option(VDJ_LTO               "Whole program optimisation in Release builds" ON)
+# Diagnostic only, and off for anything shipped. See common/vdj_trace.h: it is
+# how "the host never opened the file" is told apart from "the host opened it
+# and wanted a different interface", which nothing outside the plug-in can
+# distinguish.
+option(VDJ_TRACE             "Log every load and lifecycle call to a file" OFF)
 set(VDJ_ARCH "SSE2" CACHE STRING "x86/x64 instruction set baseline: SSE2, AVX or AVX2")
 set_property(CACHE VDJ_ARCH PROPERTY STRINGS SSE2 AVX AVX2)
 
@@ -146,6 +151,11 @@ else()
     # suites in ../foobar2000_dsp/tests compare them to the bit; reassociation
     # breaks that and nothing here is fast-math bound anyway.
     add_compile_options(-O2 -g -Wall -Wextra -Wno-unused-parameter -fno-fast-math)
+endif()
+
+if(VDJ_TRACE)
+    add_compile_definitions(VDJ_TRACE=1)
+    message(STATUS "Load tracing is ON - these are diagnostic builds, not release ones")
 endif()
 
 if(VDJ_LTO)

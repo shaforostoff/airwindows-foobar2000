@@ -335,3 +335,6 @@ tests/
 
 MIT licensed, like the rest of the tree. The VirtualDJ SDK headers are Atomix
 Productions' and are downloaded rather than vendored.
+
+
+Install path: C:\Users\USER\AppData\Local\VirtualDJ\Plugins64\SoundEffect

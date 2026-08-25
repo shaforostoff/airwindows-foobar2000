@@ -148,6 +148,17 @@ public:
 
     int lookahead() const { return m_configured ? m_cfg.latency : 0; }
 
+    //! What a restart has to run before the audio anyone hears, and the figure
+    //! is not a guess: every threshold in the detector is relative to the robust
+    //! noise scale, and that is measured over madWindow samples - 30 ms, 1323 at
+    //! 44.1 kHz. Cold, the scale starts at 1e-6 and the first block or so is
+    //! judged against nothing.
+    //!
+    //! The model itself needs no warming: fitModel() refits from the window
+    //! every block, so it is as good as the window is full, and the window is
+    //! full as soon as the pipeline has produced anything at all.
+    int warmupFrames() const { return m_configured ? m_cfg.madWindow : 0; }
+
     void push(const double * in, size_t frames) {
         if (!m_configured) return;
         declick::scoped_flush_denormals ftz;

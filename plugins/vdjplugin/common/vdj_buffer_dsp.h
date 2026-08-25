@@ -53,6 +53,7 @@
 #include "vdjDsp8.h"
 
 #include "vdj_engine.h"
+#include "vdj_trace.h"
 
 #include <stdint.h>
 
@@ -65,23 +66,39 @@ namespace vdj {
 
 // ---------------------------------------------------------------------------
 
-//! Sequential-processing budget, in seconds of audio, for the two cases where
-//! one call has to do more than a block's worth of work.
-//!
-//! kWarmup is what a restart processes before the samples that were asked for.
-//! Both cores start cold - Declick's robust noise estimate spans 30 ms and its
-//! model has to converge, Dehum's analysis window is stale after a seek - and
-//! output produced during that is worse than output produced once they have
-//! settled. 0.25 s covers Declick's estimator eight times over.
-//!
-//! kMaxGap is how far forward the pipeline will be run to catch up with a jump
-//! rather than restarting at it. Both are the same length on purpose, so that
-//! whichever branch a jump takes, one call does about the same amount of extra
-//! work: at the measured 180x realtime for Declick and 159x for Dehum, 0.25 s
-//! of audio is about 1.5 ms. That is the figure to revisit if Model order is
-//! wound up to 256, where it is roughly ten times as much.
-const double kWarmupSec = 0.25;
+//! How far forward the pipeline will be run to catch up with a jump rather than
+//! restarting at it.
 const double kMaxGapSec = 0.25;
+
+//! A restart runs the engine over Engine::warmupFrames() before the audio that
+//! was asked for, so the core is settled by the time anyone hears it. That
+//! figure comes from the engine rather than from here because only the engine
+//! knows it - Declick's is its robust noise estimate window, Dehum's is nothing
+//! at all - and a number invented at this level was the first half of a real
+//! bug. See the note on kRestartCooldownSec.
+//!
+//! kRestartCooldownSec is the second half. A warm-up is worth paying once when
+//! the stream genuinely moves; it is not worth paying when something is
+//! restarting the pipeline over and over, because then it is the whole cost and
+//! none of the benefit. So a restart that follows another within this much
+//! *produced* audio gets no warm-up at all.
+//!
+//! What made both of these necessary: `pos` does not come from one consumer.
+//! Playback asks for its block at the play head, and something else - VirtualDJ
+//! scanning the song, or another buffer plug-in upstream reading ahead of it,
+//! including Dehum's own scout in dehum_vdj_scout.h - asks for a quite
+//! different part of it in between. Every one of those alien reads is a cache
+//! miss, so it restarts the pipeline; the playback read that follows it is then
+//! a miss too, and restarts it again. Two restarts per audio buffer.
+//!
+//! With a warm-up of 0.25 s invented here, that was 22000 frames of Declick per
+//! 512 frames of audio - 43 times the necessary work, which stutters. With the
+//! engine's own figure (1323 frames at 44.1 kHz) and this cooldown it is about
+//! 1400, and the alien reads cost roughly what the audio they actually read is
+//! worth. Measured against a VirtualDJ 2025 log: Dehum Buffer's scout reading
+//! through Declick Buffer, 4096 frames at a time from the start of the record
+//! while the deck played from the middle of it.
+const double kRestartCooldownSec = 1.0;
 
 //! How much finished output is kept. Scratching inside this is free; leaving it
 //! costs a restart. 4 s is about two beats either side of the play head at any
@@ -177,8 +194,8 @@ public:
         if (!(rate >= 1000.0)) rate = 44100.0;
         try {
             engine.reset();
-            m_warmup = (int)(kWarmupSec * rate);
-            m_maxGap = (int)(kMaxGapSec * rate);
+            m_maxGap   = (int)(kMaxGapSec * rate);
+            m_cooldown = (int64_t)(kRestartCooldownSec * rate);
             m_cache.reserve((size_t)(kCacheSec * rate) + kSliceFrames);
             m_in.assign((size_t)kSliceFrames * kChannels, 0.0);
             m_out.assign((size_t)kSliceFrames * kChannels, 0.0);
@@ -189,6 +206,14 @@ public:
         }
         m_rate = rate;
         m_primed = false;
+        m_produced = 0;
+        // Backdated by a whole cooldown so the *first* restart counts as
+        // settled and gets its warm-up. It is the one that most needs it -
+        // nothing has run at all - and leaving this at zero made a fresh
+        // pipeline behave differently from a running one at the same position,
+        // which declick_vdj_verify's reproducibility check caught.
+        m_lastRestart = -m_cooldown;
+        m_restarts = 0;
         return true;
     }
 
@@ -220,7 +245,8 @@ public:
             // it before the back had been produced either.
             try {
                 m_serve.assign((size_t)nb * kChannels, 0);
-                const size_t need = (size_t)nb + (size_t)m_warmup + kSliceFrames;
+                const size_t need = (size_t)nb
+                                  + (size_t)engine.warmupFrames() + kSliceFrames;
                 if (m_cache.capacity() < need) m_cache.reserve(need);
             } catch (const std::bad_alloc &) {
                 return NULL;
@@ -267,6 +293,13 @@ public:
         return m_serve.data();
     }
 
+    //! Frames the engine has been made to produce, and how many times the stream
+    //! has been moved under it. Diagnostics, and what the interleaved-consumer
+    //! test measures: produced() against the frames actually served is the ratio
+    //! a second consumer inflates, and it was 43 when this was a bug.
+    int64_t produced() const { return m_produced; }
+    uint64_t restarts() const { return m_restarts; }
+
     size_t heapBytes() const {
         return m_cache.heapBytes()
              + (m_in.capacity() + m_out.capacity()) * sizeof(double)
@@ -279,12 +312,20 @@ private:
     //! warm-up output is not thrown away - it goes into the cache like anything
     //! else, which is what makes scratching back over a seek point free.
     void restart(Engine & engine, int64_t pos) {
-        int64_t from = pos - m_warmup;
+        // No warm-up if the last restart was recent: see kRestartCooldownSec.
+        // m_produced counts output, not calls, so this measures how much audio
+        // the pipeline actually got to run before being moved again.
+        const bool settled = (m_produced - m_lastRestart) >= m_cooldown;
+        const int64_t warm = settled ? (int64_t)engine.warmupFrames() : 0;
+
+        int64_t from = pos - warm;
         if (from < 0) from = 0;
         engine.discontinuity();
         m_inPos = from;
         m_cache.restart(from);
         m_primed = true;
+        m_lastRestart = m_produced;
+        ++m_restarts;
     }
 
     //! One slice: read input, push it, take whatever came out, cache it.
@@ -327,6 +368,7 @@ private:
             engine.pull(m_out.data(), k);
             toShorts(m_out.data(), m_stage.data(), k);
             m_cache.append(m_stage.data(), k);
+            m_produced += (int64_t)k;
         }
     }
 
@@ -336,10 +378,18 @@ private:
     std::vector<short>  m_serve;   //!< what OnGetSongBuffer hands back
 
     double  m_rate = 0.0;
-    int     m_warmup = 0;
     int     m_maxGap = 0;
+    int64_t m_cooldown = 0;
     int64_t m_inPos = 0;           //!< next song position to be fed in
     bool    m_primed = false;
+
+    //! Diagnostics, and what the interleaved-consumer test measures. m_produced
+    //! is every frame the engine has been made to produce, which against the
+    //! frames actually served is the ratio the bug in kRestartCooldownSec's note
+    //! sent to 43.
+    int64_t m_produced = 0;
+    int64_t m_lastRestart = 0;
+    uint64_t m_restarts = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -349,6 +399,7 @@ template<class Engine>
 class BufferDsp : public IVdjPluginBufferDsp8, public SongSource {
 public:
     HRESULT VDJ_API OnLoad() override {
+        VDJ_TRACEF("%s: OnLoad", Engine::bufferName());
         m_engine.declareParameters(*this);
         return S_OK;
     }
@@ -360,6 +411,8 @@ public:
         info->Version     = "1.0";
         info->Flags       = 0x00;
         info->Bitmap      = NULL;
+        VDJ_TRACEF("%s: OnGetPluginInfo - registered as \"%s\"",
+                   Engine::bufferName(), info->PluginName);
         return S_OK;
     }
 
@@ -368,8 +421,10 @@ public:
     HRESULT VDJ_API OnStart() override {
         // Switched on. Whatever is in the pipeline is from the last time it was
         // on, which may be a different record.
+        VDJ_TRACEF("%s: OnStart, SampleRate %d", Engine::bufferName(), SampleRate);
         m_pipeline.newTrack(m_engine);
         m_track[0] = 0;
+        m_traced = false;
         return S_OK;
     }
 
@@ -385,6 +440,11 @@ public:
         // configure() at a new sample rate. Nothing may cross back into
         // VirtualDJ.
         try {
+            if (!m_traced) {
+                VDJ_TRACEF("%s: first buffer, %d frames at pos %d, %d Hz",
+                           Engine::bufferName(), nb, pos, SampleRate);
+                m_traced = true;
+            }
             const double rate = (SampleRate > 0) ? (double)SampleRate : 44100.0;
             if (!m_pipeline.ready() || rate != m_pipeline.rate()) {
                 if (!m_engine.setRate(rate)) return NULL;
@@ -445,6 +505,8 @@ private:
     Engine m_engine;
     BufferPipeline<Engine> m_pipeline;
     char m_track[512] = { 0 };
+    //! Only so the trace records the first buffer rather than every buffer.
+    bool m_traced = false;
 };
 
 } // namespace vdj
