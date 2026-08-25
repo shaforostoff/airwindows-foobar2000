@@ -53,6 +53,9 @@ $plugins = Split-Path -Parent $root                  # plugins
 #
 # MacAU takes the cores but not the wrapper: an Audio Unit is a different
 # interface, so its .cpp is its own source rather than a copy of anybody's.
+# vdjplugin is in the same position for the same reason, and one folder there
+# serves the two plug-ins it builds out of each core - the live one and the
+# buffer one.
 $mirrors = @(
     @{
         From  = Join-Path $root 'foo_dsp_declick'
@@ -60,7 +63,8 @@ $mirrors = @(
         To    = @((Join-Path $plugins 'WinVST\Declick'),
                   (Join-Path $plugins 'LinuxVST\src\Declick'),
                   (Join-Path $plugins 'MacVST\Declick\source'),
-                  (Join-Path $plugins 'MacAU\Declick'))
+                  (Join-Path $plugins 'MacAU\Declick'),
+                  (Join-Path $plugins 'vdjplugin\vdj_declick'))
     },
     @{
         From  = Join-Path $root 'foo_dsp_dehum'
@@ -68,7 +72,8 @@ $mirrors = @(
         To    = @((Join-Path $plugins 'WinVST\Dehum'),
                   (Join-Path $plugins 'LinuxVST\src\Dehum'),
                   (Join-Path $plugins 'MacVST\Dehum\source'),
-                  (Join-Path $plugins 'MacAU\Dehum'))
+                  (Join-Path $plugins 'MacAU\Dehum'),
+                  (Join-Path $plugins 'vdjplugin\vdj_dehum'))
     },
     @{
         From  = Join-Path $plugins 'WinVST\Declick'

@@ -49,10 +49,12 @@ esac
 #
 # MacAU takes the cores but not the wrapper: an Audio Unit is a different
 # interface, so MacAU/Declick/Declick.cpp is its own source rather than a copy
-# of anybody's. The cores are the only thing it shares.
+# of anybody's. The cores are the only thing it shares. vdjplugin is in the same
+# position for the same reason, and takes the cores for both plug-ins it builds
+# out of each - the live one and the buffer one share the folder.
 mirrors="
-foobar2000_dsp/foo_dsp_declick|declick_core.h,declick_core.cpp|WinVST/Declick,LinuxVST/src/Declick,MacVST/Declick/source,MacAU/Declick
-foobar2000_dsp/foo_dsp_dehum|dehum_core.h,dehum_core.cpp|WinVST/Dehum,LinuxVST/src/Dehum,MacVST/Dehum/source,MacAU/Dehum
+foobar2000_dsp/foo_dsp_declick|declick_core.h,declick_core.cpp|WinVST/Declick,LinuxVST/src/Declick,MacVST/Declick/source,MacAU/Declick,vdjplugin/vdj_declick
+foobar2000_dsp/foo_dsp_dehum|dehum_core.h,dehum_core.cpp|WinVST/Dehum,LinuxVST/src/Dehum,MacVST/Dehum/source,MacAU/Dehum,vdjplugin/vdj_dehum
 WinVST/Declick|Declick.h,Declick.cpp,DeclickProc.cpp|LinuxVST/src/Declick,MacVST/Declick/source
 WinVST/Dehum|Dehum.h,Dehum.cpp,DehumProc.cpp|LinuxVST/src/Dehum,MacVST/Dehum/source
 "

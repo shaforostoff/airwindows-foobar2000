@@ -1,4 +1,8 @@
-# Release artefacts, written by foobar2000_dsp\scripts\build_release.ps1
-# (.fb2k-component archives) and build_winvst.ps1 (winvst\*.dll). One level up
-# from foobar2000_dsp because the VST2 DLLs are not foobar2000 components.
+# Release artefacts:
+#   foobar2000_dsp\scripts\build_release.ps1   .fb2k-component archives
+#   foobar2000_dsp\scripts\build_winvst.ps1    winvst\*.dll
+#   foobar2000_dsp\scripts\build_linuxvst.sh   linuxvst\*.so
+#   vdjplugin\scripts\build.ps1 and build.sh   vdj\{x64,x86,mac}
+# One level up from foobar2000_dsp because a VST2 DLL is not a foobar2000
+# component, and neither is a VirtualDJ plug-in.
 /dist/

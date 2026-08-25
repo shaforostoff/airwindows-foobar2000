@@ -1,0 +1,9 @@
+; Windows exports for every plug-in in this project.
+;
+; VDJ_API is __stdcall on Windows, so on x86 an extern "C" export is decorated
+; as _DllGetClassObject@12 and VirtualDJ's GetProcAddress("DllGetClassObject")
+; misses it. Naming it here re-exports it undecorated. On x64 and ARM64 there
+; is no decoration in the first place and this file changes nothing, which is
+; why it is applied unconditionally.
+EXPORTS
+    DllGetClassObject
