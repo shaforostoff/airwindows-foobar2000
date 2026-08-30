@@ -258,10 +258,44 @@ is the right one is not knowable when the package is built. An `uninstall.sh`
 is left beside the staging copy.
 
 Unsigned by default, which Gatekeeper will object to on any machine the file was
-downloaded to; `--sign "Developer ID Installer: ..."` and then notarising is
-what fixes that, the same argument
+downloaded to; two Developer ID identities and then notarising is what fixes
+that, the same argument
 [`../AirwindowsVSTToSignedVSTProcess.txt`](../AirwindowsVSTToSignedVSTProcess.txt)
-makes for the VSTs. `--codesign` signs the bundles inside first.
+makes for the VSTs:
+
+```bash
+# once, so the app-specific password lives in the keychain and not in argv
+xcrun notarytool store-credentials ShellacFilters \
+      --apple-id you@example.com --team-id ABCDE12345 \
+      --password abcd-efgh-ijkl-mnop
+
+scripts/package.sh \
+      --codesign "Developer ID Application: Some One (ABCDE12345)" \
+      --sign     "Developer ID Installer: Some One (ABCDE12345)" \
+      --notarize --notary-profile ShellacFilters
+```
+
+`--codesign` signs the bundles inside — with the hardened runtime and a secure
+timestamp, which is what makes them notarisable — `--sign` signs the package,
+and `--notarize` submits it, waits, staples the ticket and checks the result
+with `spctl`. Stapling matters: without the ticket written into the package,
+Gatekeeper has to ask Apple at open time, and a laptop in a booth with no
+network refuses a package that is in fact notarised.
+
+Credentials never come from an option, only from the keychain profile above or
+from the environment — an option value is in the shell history and in `ps`
+output. For a one-off without a stored profile:
+
+```bash
+NOTARY_PASSWORD=abcd-efgh-ijkl-mnop scripts/package.sh --codesign ... --sign ... \
+      --notarize --apple-id you@example.com --team-id ABCDE12345
+```
+
+and on a shared build machine, an App Store Connect API key
+(`NOTARY_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER`), which is not tied to
+anyone's Apple ID and can be revoked on its own. All of it is checked before
+the build starts rather than after it — `scripts/package.sh --help` lists the
+rest.
 
 The Windows installer is unsigned too, and SmartScreen will warn about it on any
 machine it was downloaded to until enough people have run it. An Authenticode
